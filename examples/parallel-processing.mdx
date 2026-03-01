@@ -1,0 +1,254 @@
+---
+title: Parallel processing
+description: Extract data from large documents using concurrent chunk processing
+---
+
+The parallel strategy processes large documents by splitting them into chunks, extracting from each chunk concurrently, and merging results with an LLM.
+
+## Basic parallel extraction
+
+Extract items from a multi-page document:
+
+```ts
+import { extract, parallel, type Artifact } from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+import { google } from "@ai-sdk/google";
+
+type Output = {
+  items: Array<{ name: string }>;
+};
+
+const schema: JSONSchemaType<Output> = {
+  type: "object",
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["items"],
+  additionalProperties: false,
+};
+
+const artifacts: Artifact[] = [
+  {
+    id: "page-1",
+    type: "pdf",
+    raw: async () => Buffer.from(""),
+    contents: [{ page: 1, text: "Item: Alpha" }],
+  },
+  {
+    id: "page-2",
+    type: "pdf",
+    raw: async () => Buffer.from(""),
+    contents: [{ page: 2, text: "Item: Beta" }],
+  },
+];
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-2.0-flash-exp"),
+    mergeModel: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000,
+    concurrency: 2,
+  }),
+});
+
+console.log(result.data.items);
+// [{ name: "Alpha" }, { name: "Beta" }]
+```
+
+## How it works
+
+The parallel strategy follows this process:
+
+<Steps>
+  <Step title="Split into batches">
+    Content is split into batches based on `chunkSize` (token budget) and `maxImages`.
+  </Step>
+  
+  <Step title="Extract concurrently">
+    Each batch is processed in parallel with up to `concurrency` simultaneous requests.
+  </Step>
+  
+  <Step title="Merge results">
+    The `mergeModel` combines all batch results into a single validated output.
+  </Step>
+</Steps>
+
+## Configuration options
+
+Control performance and cost with these options:
+
+```ts
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-2.0-flash-exp"),
+    mergeModel: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000,        // Token budget per batch
+    concurrency: 4,            // Max parallel requests
+    maxImages: 10,             // Max images per batch
+    outputInstructions: "Extract all unique items, removing duplicates.",
+  }),
+});
+```
+
+<Note>
+Higher `concurrency` increases speed but requires more API quota. Start with 2-4 and increase as needed.
+</Note>
+
+## Large document extraction
+
+Extract data from a 50-page report:
+
+```ts
+import { extract, parallel, fileToArtifact } from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+import { anthropic } from "@ai-sdk/anthropic";
+
+type Report = {
+  findings: Array<{
+    section: string;
+    summary: string;
+    recommendations: string[];
+  }>;
+};
+
+const schema: JSONSchemaType<Report> = {
+  type: "object",
+  properties: {
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          section: { type: "string" },
+          summary: { type: "string" },
+          recommendations: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["section", "summary", "recommendations"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["findings"],
+  additionalProperties: false,
+};
+
+// Load PDF artifact (requires a PDF provider)
+const buffer = await Bun.file("report.pdf").arrayBuffer();
+const artifact = await fileToArtifact(Buffer.from(buffer), {
+  mimeType: "application/pdf",
+  providers: {
+    "application/pdf": async (buf) => ({
+      id: "report",
+      type: "pdf",
+      raw: async () => buf,
+      contents: [/* PDF parsing result */],
+    }),
+  },
+});
+
+const result = await extract({
+  artifacts: [artifact],
+  schema,
+  strategy: parallel({
+    model: anthropic("claude-3-5-haiku-20241022"),
+    mergeModel: anthropic("claude-3-5-sonnet-20241022"),
+    chunkSize: 15_000,
+    concurrency: 3,
+  }),
+  events: {
+    onProgress: ({ current, total }) => {
+      console.log(`Processing batch ${current}/${total}`);
+    },
+  },
+});
+
+console.log(`Extracted ${result.data.findings.length} findings`);
+```
+
+## Progress tracking
+
+Monitor extraction progress with event handlers:
+
+```ts
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-2.0-flash-exp"),
+    mergeModel: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000,
+    concurrency: 4,
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Step ${step}/${total}: ${label}`);
+    },
+    onProgress: ({ current, total, percent }) => {
+      console.log(`Progress: ${percent}% (${current}/${total} batches)`);
+    },
+    onTokenUsage: ({ inputTokens, outputTokens, totalTokens }) => {
+      console.log(`Tokens used: ${totalTokens} (${inputTokens} in, ${outputTokens} out)`);
+    },
+  },
+});
+```
+
+## When to use parallel strategy
+
+The parallel strategy is ideal for:
+
+- **Large documents** (50+ pages) that exceed context limits
+- **Independent content** where each page/section is self-contained
+- **Speed requirements** where concurrent processing is worth the cost
+- **Array outputs** like extracting multiple items or records
+
+<Warning>
+The parallel strategy is more expensive than sequential because it requires a separate merge request. Use `parallelAutoMerge` for schema-aware merging without LLM cost.
+</Warning>
+
+## Choosing merge models
+
+You can use different models for extraction and merging:
+
+```ts
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-2.0-flash-exp"),           // Fast, cheap for extraction
+    mergeModel: anthropic("claude-3-5-sonnet-20241022"), // Powerful for merge
+    chunkSize: 10_000,
+    concurrency: 4,
+  }),
+});
+```
+
+<Tip>
+Use a cheaper model for batch extraction and a more capable model for merging to balance cost and quality.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Parallel auto-merge" icon="merge" href="/api/strategies/parallel-auto-merge">
+    Skip LLM merge with schema-aware deduplication
+  </Card>
+  <Card title="Sequential strategy" icon="list" href="/api/strategies/sequential">
+    Build context incrementally for narrative documents
+  </Card>
+</CardGroup>

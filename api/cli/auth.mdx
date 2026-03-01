@@ -1,0 +1,266 @@
+---
+title: auth
+description: Manage provider API tokens and default models
+---
+
+The `auth` command manages API tokens for AI providers and sets default models for extraction. Tokens are stored securely in macOS Keychain (when available) or in `~/.config/struktur/tokens.json` with strict file permissions.
+
+## Subcommands
+
+### auth set
+
+Store an API token for a provider.
+
+```bash
+struktur auth set --provider <name> --token <token>
+struktur auth set --provider <name> --token-stdin
+```
+
+<ParamField path="--provider" type="string" required>
+  Provider name: `openai`, `anthropic`, `google`, `opencode`, or `openrouter`
+</ParamField>
+
+<ParamField path="--token" type="string">
+  API token value (prefer `--token-stdin` for security)
+</ParamField>
+
+<ParamField path="--token-stdin" type="boolean">
+  Read token from stdin to avoid shell history
+</ParamField>
+
+<ParamField path="--storage" type="string" default="auto">
+  Storage backend: `auto`, `keychain`, or `file`. Auto uses macOS Keychain when available, otherwise falls back to file.
+</ParamField>
+
+<ParamField path="--default" type="boolean">
+  Set the cheapest model from this provider as the default
+</ParamField>
+
+**Examples:**
+
+```bash
+# Store token from stdin (recommended)
+echo "sk-..." | struktur auth set --provider openai --token-stdin
+```
+
+Output:
+```json
+{
+  "provider": "openai",
+  "stored": "keychain"
+}
+```
+
+```bash
+# Store token and set default model
+echo "sk-..." | struktur auth set \
+  --provider openai \
+  --token-stdin \
+  --default
+```
+
+Output:
+```json
+{
+  "provider": "openai",
+  "stored": "keychain",
+  "defaultModel": "openai/gpt-4o-mini"
+}
+```
+
+```bash
+# Force file storage
+echo "sk-..." | struktur auth set \
+  --provider anthropic \
+  --token-stdin \
+  --storage file
+```
+
+Output:
+```json
+{
+  "provider": "anthropic",
+  "stored": "file"
+}
+```
+
+### auth default
+
+Set the default model for extraction.
+
+```bash
+struktur auth default <provider>
+struktur auth default --model <provider/model>
+```
+
+<ParamField path="provider" type="string">
+  Provider name (positional). Sets the cheapest model from this provider as default.
+</ParamField>
+
+<ParamField path="--model" type="string">
+  Explicit model identifier in format `provider/model`
+</ParamField>
+
+**Examples:**
+
+```bash
+# Set cheapest model from provider
+struktur auth default openai
+```
+
+Output:
+```json
+{
+  "defaultModel": "openai/gpt-4o-mini"
+}
+```
+
+```bash
+# Set specific model
+struktur auth default --model anthropic/claude-4-sonnet
+```
+
+Output:
+```json
+{
+  "defaultModel": "anthropic/claude-4-sonnet"
+}
+```
+
+### auth get
+
+Retrieve a stored token (masked by default).
+
+```bash
+struktur auth get --provider <name> [--raw]
+```
+
+<ParamField path="--provider" type="string" required>
+  Provider name
+</ParamField>
+
+<ParamField path="--raw" type="boolean">
+  Print full token without masking
+</ParamField>
+
+**Examples:**
+
+```bash
+# Get masked token
+struktur auth get --provider openai
+```
+
+Output:
+```
+sk-p...x7Qz
+```
+
+```bash
+# Get raw token
+struktur auth get --provider openai --raw
+```
+
+Output:
+```
+sk-proj-abc123...
+```
+
+### auth delete
+
+Remove a stored token.
+
+```bash
+struktur auth delete --provider <name>
+```
+
+<ParamField path="--provider" type="string" required>
+  Provider name
+</ParamField>
+
+**Example:**
+
+```bash
+struktur auth delete --provider openai
+```
+
+Output:
+```json
+{
+  "provider": "openai",
+  "deleted": true
+}
+```
+
+### auth list
+
+List all stored providers.
+
+```bash
+struktur auth list
+```
+
+**Example:**
+
+```bash
+struktur auth list
+```
+
+Output:
+```json
+{
+  "providers": [
+    {
+      "provider": "openai",
+      "storage": "keychain"
+    },
+    {
+      "provider": "anthropic",
+      "storage": "file"
+    }
+  ]
+}
+```
+
+## Supported providers
+
+- `openai` - OpenAI (GPT models)
+- `anthropic` - Anthropic (Claude models)
+- `google` - Google Generative AI (Gemini models)
+- `opencode` - OpenCode Zen (multi-provider)
+- `openrouter` - OpenRouter (multi-provider)
+
+## Storage backends
+
+### macOS Keychain
+
+On macOS, tokens are stored in the system Keychain by default:
+- Service: `struktur` (or `$STRUKTUR_KEYCHAIN_SERVICE`)
+- Account: provider name
+- Requires `/usr/bin/security` binary
+
+### File storage
+
+Tokens are stored at `~/.config/struktur/tokens.json` with:
+- Directory permissions: `0700`
+- File permissions: `0600`
+
+## Environment variables
+
+<ParamField path="STRUKTUR_CONFIG_DIR" type="string">
+  Override config directory (default: `~/.config/struktur`)
+</ParamField>
+
+<ParamField path="STRUKTUR_DISABLE_KEYCHAIN" type="boolean">
+  Force file storage even on macOS
+</ParamField>
+
+<ParamField path="STRUKTUR_KEYCHAIN_SERVICE" type="string" default="struktur">
+  macOS Keychain service name
+</ParamField>
+
+## Token precedence
+
+1. Stored tokens (via `auth set`)
+2. Environment variables (`OPENAI_API_KEY`, etc.)
+
+Stored tokens always take precedence over environment variables when both are present.

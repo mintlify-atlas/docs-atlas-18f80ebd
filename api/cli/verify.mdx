@@ -1,0 +1,110 @@
+---
+title: verify
+description: Validate artifact JSON structure and format
+---
+
+The `verify` command validates that artifact JSON conforms to the expected structure. This is useful for testing artifact generation or debugging extraction pipelines.
+
+## Usage
+
+```bash
+struktur verify [options]
+```
+
+## Options
+
+<ParamField path="--input" type="string" default="-">
+  Path to artifact JSON file, or `-` to read from stdin (default)
+</ParamField>
+
+## Examples
+
+### Verify artifact from file
+
+```bash
+struktur verify --input artifacts.json
+```
+
+Output:
+```json
+{
+  "valid": true,
+  "artifacts": 3
+}
+```
+
+### Verify artifact from stdin
+
+```bash
+cat artifacts.json | struktur verify
+```
+
+Output:
+```json
+{
+  "valid": true,
+  "artifacts": 1
+}
+```
+
+### Pipeline verification
+
+```bash
+# Verify artifacts before extraction
+struktur verify --input preprocessed.json && \
+struktur --artifact preprocessed.json \
+  --schema schema.json \
+  --output results.json
+```
+
+## Artifact format
+
+Valid artifact JSON must be an array of artifact objects:
+
+```json
+[
+  {
+    "text": "Document text content",
+    "media": []
+  },
+  {
+    "text": "More content",
+    "media": [
+      {
+        "type": "image",
+        "mimeType": "image/png",
+        "data": "base64-encoded-data"
+      }
+    ]
+  }
+]
+```
+
+## Error handling
+
+### Invalid JSON
+
+```bash
+echo '{invalid}' | struktur verify
+```
+
+Output:
+```
+JSON Parse error: Unexpected identifier "invalid"
+```
+
+### Invalid artifact structure
+
+```bash
+echo '{"text": "content"}' | struktur verify
+```
+
+Output:
+```
+Invalid artifact format: expected array of artifacts
+```
+
+## Exit codes
+
+- `0` - Artifacts are valid
+- `1` - Invalid JSON or artifact structure

@@ -1,0 +1,120 @@
+---
+title: sequentialAutoMerge()
+description: Sequential extraction with automatic schema-aware merging and LLM-based deduplication
+---
+
+The `sequentialAutoMerge()` strategy processes document chunks sequentially, automatically merges results using schema-aware logic as it goes, removes exact duplicates, and uses an LLM to identify and remove semantic duplicates.
+
+## Usage
+
+```typescript
+import { extract, sequentialAutoMerge } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: sequentialAutoMerge({
+    model: openai('gpt-4o'),
+    chunkSize: 100000,
+  }),
+});
+```
+
+## Configuration
+
+<ParamField path="model" type="LanguageModel" required>
+  The AI SDK language model to use for extraction.
+</ParamField>
+
+<ParamField path="chunkSize" type="number" required>
+  Maximum tokens per chunk. Documents are split into batches that fit within this limit.
+</ParamField>
+
+<ParamField path="maxImages" type="number">
+  Maximum number of images per chunk. Useful for controlling vision API costs.
+</ParamField>
+
+<ParamField path="outputInstructions" type="string">
+  Additional instructions to guide the model's output format or behavior.
+</ParamField>
+
+<ParamField path="dedupeModel" type="LanguageModel">
+  The AI SDK language model to use for semantic deduplication. Defaults to the extraction `model`.
+</ParamField>
+
+<ParamField path="execute" type="function">
+  Custom retry executor function for extraction. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="dedupeExecute" type="function">
+  Custom retry executor function for deduplication. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="strict" type="boolean">
+  Enable strict mode for structured output validation. Defaults to `false`.
+</ParamField>
+
+## When to use
+
+- You have large documents with potential duplicate data
+- Sequential processing is important for your use case
+- You don't want to write custom merge logic
+- You want automatic deduplication
+
+## How it works
+
+1. **Sequential extraction**: Processes chunks one at a time
+2. **Incremental merge**: Uses `SmartDataMerger` to combine each result as it arrives
+3. **Hash-based deduplication**: Removes exact duplicates using hash comparison
+4. **LLM deduplication**: Uses an LLM to identify semantic duplicates and returns paths to remove
+
+## Trade-offs
+
+**Advantages:**
+- No custom merge logic needed
+- Automatic duplicate removal
+- Schema-aware merging
+- Lower peak memory usage than parallel strategies
+
+**Limitations:**
+- Slower than parallel strategies (no concurrency)
+- Higher token usage than basic sequential (dedupe step)
+- Less control over merge strategy
+
+## Performance characteristics
+
+The strategy estimates `batches.length + 3` steps:
+1. Prepare
+2. Extract from batch 1 through N (sequential)
+3. Dedupe
+4. Complete
+
+Processing is sequential, so total time = sum of all chunk processing times + dedupe time.
+
+## Example with custom dedupe model
+
+```typescript
+import { extract, sequentialAutoMerge } from 'struktur';
+import { anthropic } from '@ai-sdk/anthropic';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts: transactionHistoryArtifacts,
+  schema: transactionsSchema,
+  strategy: sequentialAutoMerge({
+    model: anthropic('claude-3-5-sonnet-20241022'),
+    dedupeModel: openai('gpt-4o'), // Use different model for deduplication
+    chunkSize: 150000,
+    maxImages: 3,
+    outputInstructions: 'Process chronologically, maintaining transaction order',
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Step ${step}/${total}: ${label}`);
+    },
+  },
+});
+
+console.log(`Extracted ${result.data.transactions.length} unique transactions`);
+```

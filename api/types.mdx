@@ -1,0 +1,392 @@
+---
+title: Core types
+description: TypeScript types and interfaces for Struktur's core API.
+---
+
+## Overview
+
+Struktur exports a comprehensive set of TypeScript types for type-safe extraction workflows. All types are exported from the main package entry point.
+
+## Artifact types
+
+### Artifact
+
+The core interface representing a pre-parsed document with text and optional media content.
+
+```typescript
+interface Artifact {
+  id: string;
+  type: ArtifactType;
+  raw: () => Promise<Buffer>;
+  contents: ArtifactContent[];
+  metadata?: Record<string, unknown>;
+  tokens?: number;
+}
+```
+
+<ParamField path="id" type="string" required>
+  Unique identifier for this artifact.
+</ParamField>
+
+<ParamField path="type" type="ArtifactType" required>
+  The type of artifact: `"text"`, `"image"`, `"pdf"`, or `"file"`.
+</ParamField>
+
+<ParamField path="raw" type="() => Promise<Buffer>" required>
+  Async function that returns the raw buffer of the original source.
+</ParamField>
+
+<ParamField path="contents" type="ArtifactContent[]" required>
+  Array of content slices. Each slice can contain text and/or media for a specific page or section.
+</ParamField>
+
+<ParamField path="metadata" type="Record<string, unknown>">
+  Optional metadata associated with the artifact.
+</ParamField>
+
+<ParamField path="tokens" type="number">
+  Optional pre-calculated token count for this artifact.
+</ParamField>
+
+### ArtifactType
+
+Union type defining the possible artifact types.
+
+```typescript
+type ArtifactType = "text" | "image" | "pdf" | "file";
+```
+
+### ArtifactContent
+
+Represents a single content slice within an artifact.
+
+```typescript
+type ArtifactContent = {
+  page?: number;
+  text?: string;
+  media?: ArtifactImage[];
+};
+```
+
+<ParamField path="page" type="number">
+  Optional page number for multi-page documents.
+</ParamField>
+
+<ParamField path="text" type="string">
+  Text content for this slice.
+</ParamField>
+
+<ParamField path="media" type="ArtifactImage[]">
+  Array of images associated with this content slice.
+</ParamField>
+
+### ArtifactImage
+
+Represents an image within artifact content.
+
+```typescript
+type ArtifactImage = {
+  type: "image";
+  url?: string;
+  base64?: string;
+  contents?: Buffer;
+  text?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+};
+```
+
+<ParamField path="type" type="'image'" required>
+  Fixed value identifying this as an image.
+</ParamField>
+
+<ParamField path="url" type="string">
+  URL to the image resource.
+</ParamField>
+
+<ParamField path="base64" type="string">
+  Base64-encoded image data.
+</ParamField>
+
+<ParamField path="contents" type="Buffer">
+  Raw image buffer.
+</ParamField>
+
+<ParamField path="text" type="string">
+  Optional alt text or OCR text associated with the image.
+</ParamField>
+
+<ParamField path="x" type="number">
+  X-coordinate for positioned images.
+</ParamField>
+
+<ParamField path="y" type="number">
+  Y-coordinate for positioned images.
+</ParamField>
+
+<ParamField path="width" type="number">
+  Image width in pixels or points.
+</ParamField>
+
+<ParamField path="height" type="number">
+  Image height in pixels or points.
+</ParamField>
+
+## Extraction types
+
+### ExtractionOptions
+
+Configuration object passed to the `extract()` function.
+
+```typescript
+type ExtractionOptions<T> = {
+  artifacts: Artifact[];
+  schema: TypedJSONSchema<T> | AnyJSONSchema;
+  strategy: ExtractionStrategy<T>;
+  events?: ExtractionEvents;
+};
+```
+
+<ParamField path="artifacts" type="Artifact[]" required>
+  Array of artifacts to extract from.
+</ParamField>
+
+<ParamField path="schema" type="TypedJSONSchema<T> | AnyJSONSchema" required>
+  JSON Schema for validation and type inference.
+</ParamField>
+
+<ParamField path="strategy" type="ExtractionStrategy<T>" required>
+  Strategy instance that defines the extraction workflow.
+</ParamField>
+
+<ParamField path="events" type="ExtractionEvents">
+  Optional event handlers for progress and debugging.
+</ParamField>
+
+### ExtractionResult
+
+The result returned by `extract()`.
+
+```typescript
+type ExtractionResult<T> = {
+  data: T;
+  usage: Usage;
+  error?: Error;
+};
+```
+
+<ParamField path="data" type="T" required>
+  The extracted data, validated against the schema. Will be `null` (cast to `T`) if extraction failed.
+</ParamField>
+
+<ParamField path="usage" type="Usage" required>
+  Token usage statistics.
+</ParamField>
+
+<ParamField path="error" type="Error">
+  Error object if extraction failed.
+</ParamField>
+
+### ExtractionStrategy
+
+Interface that all strategy implementations must satisfy.
+
+```typescript
+interface ExtractionStrategy<T> {
+  name: string;
+  run(options: ExtractionOptions<T>): Promise<ExtractionResult<T>>;
+  getEstimatedSteps?: (artifacts: Artifact[]) => number;
+}
+```
+
+<ParamField path="name" type="string" required>
+  Unique identifier for the strategy (e.g., "simple", "parallel").
+</ParamField>
+
+<ParamField path="run" type="(options: ExtractionOptions<T>) => Promise<ExtractionResult<T>>" required>
+  Executes the extraction workflow.
+</ParamField>
+
+<ParamField path="getEstimatedSteps" type="(artifacts: Artifact[]) => number">
+  Optional method that returns the estimated number of steps for progress tracking.
+</ParamField>
+
+### Usage
+
+Token usage statistics.
+
+```typescript
+type Usage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+```
+
+<ParamField path="inputTokens" type="number" required>
+  Total input tokens consumed.
+</ParamField>
+
+<ParamField path="outputTokens" type="number" required>
+  Total output tokens generated.
+</ParamField>
+
+<ParamField path="totalTokens" type="number" required>
+  Sum of input and output tokens.
+</ParamField>
+
+## Event types
+
+### ExtractionEvents
+
+Event handlers for monitoring extraction progress.
+
+```typescript
+type ExtractionEvents = {
+  onStep?: (info: StepInfo) => void | Promise<void>;
+  onMessage?: (info: MessageInfo) => void | Promise<void>;
+  onProgress?: (info: ProgressInfo) => void | Promise<void>;
+  onTokenUsage?: (info: TokenUsageInfo) => void | Promise<void>;
+};
+```
+
+<ParamField path="onStep" type="(info: StepInfo) => void | Promise<void>">
+  Called at each major step.
+</ParamField>
+
+<ParamField path="onMessage" type="(info: MessageInfo) => void | Promise<void>">
+  Called when LLM messages are exchanged.
+</ParamField>
+
+<ParamField path="onProgress" type="(info: ProgressInfo) => void | Promise<void>">
+  Called during batch processing.
+</ParamField>
+
+<ParamField path="onTokenUsage" type="(info: TokenUsageInfo) => void | Promise<void>">
+  Called after each LLM call with usage stats.
+</ParamField>
+
+### StepInfo
+
+```typescript
+type StepInfo = {
+  step: number;
+  total?: number;
+  label?: string;
+};
+```
+
+### MessageInfo
+
+```typescript
+type MessageInfo = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: unknown;
+};
+```
+
+### ProgressInfo
+
+```typescript
+type ProgressInfo = {
+  current: number;
+  total: number;
+  percent?: number;
+};
+```
+
+### TokenUsageInfo
+
+```typescript
+type TokenUsageInfo = Usage & {
+  model?: string;
+};
+```
+
+Extends `Usage` with an optional model identifier.
+
+## Schema types
+
+### TypedJSONSchema
+
+Ajv's typed JSON Schema type for type inference.
+
+```typescript
+import type { JSONSchemaType } from "ajv";
+
+type TypedJSONSchema<T> = JSONSchemaType<T>;
+```
+
+When you use `JSONSchemaType<T>`, the `extract()` function can infer the type of `result.data`.
+
+### AnyJSONSchema
+
+Untyped JSON Schema.
+
+```typescript
+type AnyJSONSchema = Record<string, unknown>;
+```
+
+Use this when you don't need compile-time type inference.
+
+## Usage example
+
+```typescript
+import type {
+  Artifact,
+  ExtractionOptions,
+  ExtractionResult,
+  Usage,
+} from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+
+// Define your output type
+type Invoice = {
+  invoiceNumber: string;
+  total: number;
+  items: Array<{ description: string; amount: number }>;
+};
+
+// Create a typed schema
+const schema: JSONSchemaType<Invoice> = {
+  type: "object",
+  properties: {
+    invoiceNumber: { type: "string" },
+    total: { type: "number" },
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          description: { type: "string" },
+          amount: { type: "number" },
+        },
+        required: ["description", "amount"],
+      },
+    },
+  },
+  required: ["invoiceNumber", "total", "items"],
+  additionalProperties: false,
+};
+
+// result.data is now typed as Invoice
+const result: ExtractionResult<Invoice> = await extract({
+  artifacts,
+  schema,
+  strategy,
+});
+
+if (!result.error) {
+  // TypeScript knows result.data is Invoice
+  console.log(result.data.invoiceNumber);
+  console.log(result.data.total);
+}
+```
+
+## See also
+
+- [extract()](/api/extract) - Core extraction function
+- [Artifacts](/core-concepts/artifacts) - Working with artifacts
+- [Strategies](/strategies/overview) - Extraction strategies

@@ -1,0 +1,93 @@
+---
+title: urlToArtifact
+description: Fetch and deserialize artifacts from remote URLs
+---
+
+The `urlToArtifact` function fetches artifact JSON from a remote URL and returns a hydrated `Artifact` object.
+
+## Function signature
+
+```typescript
+export const urlToArtifact = async (url: string): Promise<Artifact>
+```
+
+## Parameters
+
+<ParamField path="url" type="string" required>
+  The URL to fetch the artifact JSON from. Must return a valid JSON response matching the serialized artifact format.
+</ParamField>
+
+## Returns
+
+<ResponseField name="artifact" type="Artifact">
+  A fully hydrated artifact object with all required properties.
+</ResponseField>
+
+## Behavior
+
+The function performs the following steps:
+
+1. Fetches the artifact JSON from the provided URL using the Fetch API
+2. Throws an error if the response is not OK (status code outside 200-299)
+3. Parses the response as JSON expecting a serialized artifact format
+4. Hydrates the artifact by adding a `raw` function that returns the stringified contents as a Buffer
+
+The remote endpoint must return JSON in the following format:
+
+```typescript
+{
+  id: string;
+  type: "text" | "image" | "pdf" | "file";
+  contents: Array<{
+    page?: number;
+    text?: string;
+    media?: Array<{
+      type: "image";
+      url?: string;
+      base64?: string;
+      text?: string;
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+    }>;
+  }>;
+  metadata?: Record<string, unknown>;
+  tokens?: number;
+}
+```
+
+## Example
+
+```typescript
+import { urlToArtifact } from "struktur";
+
+const artifact = await urlToArtifact("https://api.example.com/artifacts/123");
+
+console.log(artifact.id); // "123"
+console.log(artifact.type); // "pdf"
+console.log(artifact.contents[0]?.text); // "Page 1 content"
+
+// Access raw buffer
+const buffer = await artifact.raw();
+```
+
+## Error handling
+
+The function throws errors in the following cases:
+
+- Network request fails
+- Response status is not OK (400, 500, etc.)
+- Response body is not valid JSON
+
+```typescript
+try {
+  const artifact = await urlToArtifact("https://api.example.com/missing");
+} catch (error) {
+  console.error(error.message); // "Failed to fetch artifact: 404 Not Found"
+}
+```
+
+## Source
+
+Implementation: `src/artifacts/urlToArtifact.ts:3`

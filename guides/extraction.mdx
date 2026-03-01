@@ -1,0 +1,269 @@
+---
+title: Running extractions
+description: Learn how to extract structured data from artifacts using different strategies
+---
+
+Strukt provides a powerful `extract()` function that transforms pre-parsed artifacts into validated JSON using AI models. This guide covers how to run extractions and when to use each strategy.
+
+## Basic extraction
+
+Every extraction requires three components: artifacts, a JSON schema, and a strategy.
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+import { google } from "@ai-sdk/google";
+
+type Output = { title: string; author: string };
+
+const schema: JSONSchemaType<Output> = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    author: { type: "string" }
+  },
+  required: ["title", "author"],
+  additionalProperties: false
+};
+
+const result = await extract({
+  artifacts: [/* your artifacts */],
+  schema,
+  strategy: simple({ model: google("gemini-1.5-flash") })
+});
+
+console.log(result.data.title); // Type-safe!
+```
+
+## Extraction strategies
+
+Strukt provides seven strategies optimized for different scenarios:
+
+### Simple strategy
+
+Best for small inputs that fit within a single model context window.
+
+```typescript
+import { simple } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const strategy = simple({
+  model: google("gemini-1.5-flash")
+});
+```
+
+**When to use:**
+- Small documents (< 10,000 tokens)
+- Single-page PDFs or short articles
+- Fast responses are critical
+
+### Parallel strategy
+
+Processes large inputs by splitting them into concurrent batches, then merges results using an LLM.
+
+```typescript
+import { parallel } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const strategy = parallel({
+  model: google("gemini-1.5-flash"),
+  mergeModel: google("gemini-1.5-flash"),
+  chunkSize: 10_000,
+  concurrency: 4
+});
+```
+
+**When to use:**
+- Large documents that exceed context limits
+- Speed is important (processes batches concurrently)
+- Willing to use a merge model to consolidate results
+
+**Options:**
+- `chunkSize`: Token budget per batch (default: 10,000)
+- `concurrency`: Max parallel batches (default: all)
+- `maxImages`: Optional image limit per batch
+
+### Sequential strategy
+
+Processes batches in order, passing previous results as context to each batch.
+
+```typescript
+import { sequential } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const strategy = sequential({
+  model: google("gemini-1.5-flash"),
+  chunkSize: 10_000
+});
+```
+
+**When to use:**
+- Documents where order matters (narratives, timelines)
+- Extracting data that builds on previous sections
+- Need to maintain context across chunks
+
+**Options:**
+- `chunkSize`: Token budget per batch
+- `maxImages`: Optional image limit per batch
+
+### Parallel auto-merge strategy
+
+Like parallel, but uses schema-aware merging and deduplication instead of an LLM merge.
+
+```typescript
+import { parallelAutoMerge } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const strategy = parallelAutoMerge({
+  model: google("gemini-1.5-flash"),
+  dedupeModel: google("gemini-1.5-flash"),
+  chunkSize: 10_000,
+  concurrency: 4
+});
+```
+
+**When to use:**
+- Extracting lists or arrays with potential duplicates
+- Need precise control over merge behavior
+- Schema has clear merge/dedupe semantics
+
+**How it works:**
+1. Processes batches in parallel
+2. Merges results using schema rules (concatenate arrays, pick first for primitives)
+3. Deduplicates using CRC32 hashing
+4. LLM dedupe pass for semantic duplicates
+
+### Sequential auto-merge strategy
+
+Sequential processing with schema-aware merge and dedupe.
+
+```typescript
+import { sequentialAutoMerge } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const strategy = sequentialAutoMerge({
+  model: google("gemini-1.5-flash"),
+  dedupeModel: google("gemini-1.5-flash"),
+  chunkSize: 10_000
+});
+```
+
+**When to use:**
+- Ordered documents with potential duplicates
+- Need both context carryover and deduplication
+
+### Double-pass strategy
+
+Runs parallel extraction, then refines with a sequential pass.
+
+```typescript
+import { doublePass } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const strategy = doublePass({
+  model: google("gemini-1.5-flash"),
+  mergeModel: google("gemini-1.5-flash"),
+  chunkSize: 10_000,
+  concurrency: 4
+});
+```
+
+**When to use:**
+- Need highest accuracy
+- Large documents with complex structure
+- Can afford two passes over the data
+
+### Double-pass auto-merge strategy
+
+Combines parallel auto-merge with sequential refinement.
+
+```typescript
+import { doublePassAutoMerge } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const strategy = doublePassAutoMerge({
+  model: google("gemini-1.5-flash"),
+  dedupeModel: google("gemini-1.5-flash"),
+  chunkSize: 10_000,
+  concurrency: 4
+});
+```
+
+**When to use:**
+- Maximum accuracy with deduplication
+- Complex documents with duplicates
+- Quality is more important than speed
+
+## Custom output instructions
+
+All strategies support custom output instructions to guide the model:
+
+```typescript
+const strategy = simple({
+  model: google("gemini-1.5-flash"),
+  outputInstructions: "Extract only information from the first page. Ignore footnotes and references."
+});
+```
+
+## Strategy comparison
+
+| Strategy | Speed | Accuracy | Context | Deduplication | Use case |
+|----------|-------|----------|---------|---------------|----------|
+| Simple | Fastest | Good | Single pass | No | Small documents |
+| Parallel | Fast | Good | Independent chunks | No | Large documents, speed priority |
+| Sequential | Medium | Better | Cumulative | No | Ordered content |
+| Parallel auto-merge | Fast | Good | Independent | Yes | Lists with duplicates |
+| Sequential auto-merge | Medium | Better | Cumulative | Yes | Ordered lists |
+| Double-pass | Slow | Best | Two passes | No | Complex documents |
+| Double-pass auto-merge | Slowest | Best | Two passes | Yes | Complex lists |
+
+## Working with results
+
+The extract function returns an `ExtractionResult` with typed data and token usage:
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy
+});
+
+if (result.error) {
+  console.error("Extraction failed:", result.error);
+} else {
+  console.log("Data:", result.data);
+  console.log("Token usage:", result.usage);
+}
+```
+
+**Result fields:**
+- `data`: Extracted data matching your schema type
+- `usage`: Token usage statistics
+  - `inputTokens`: Tokens sent to the model
+  - `outputTokens`: Tokens generated by the model
+  - `totalTokens`: Sum of input and output
+- `error`: Error object if extraction failed
+
+## Error handling
+
+Strukt validates all outputs against your schema using Ajv. If validation fails, it retries with error feedback:
+
+```typescript
+try {
+  const result = await extract({
+    artifacts,
+    schema,
+    strategy
+  });
+  
+  if (result.error) {
+    // Handle validation or extraction errors
+    console.error(result.error.message);
+  }
+} catch (error) {
+  // Handle unexpected errors
+  console.error("Unexpected error:", error);
+}
+```
+
+Validation errors include detailed information about schema mismatches, helping you refine your schema or fix data quality issues.

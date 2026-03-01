@@ -1,0 +1,121 @@
+---
+title: doublePass()
+description: Two-pass extraction strategy that combines parallel and sequential processing with LLM merge
+---
+
+The `doublePass()` strategy performs extraction in two passes: first, it processes chunks in parallel and merges them with an LLM; second, it processes chunks sequentially using the merged result as context to refine the extraction.
+
+## Usage
+
+```typescript
+import { extract, doublePass } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: doublePass({
+    model: openai('gpt-4o'),
+    mergeModel: openai('gpt-4o'),
+    chunkSize: 100000,
+  }),
+});
+```
+
+## Configuration
+
+<ParamField path="model" type="LanguageModel" required>
+  The AI SDK language model to use for extraction in both passes.
+</ParamField>
+
+<ParamField path="mergeModel" type="LanguageModel" required>
+  The AI SDK language model to use for merging pass 1 results. Typically a more capable model.
+</ParamField>
+
+<ParamField path="chunkSize" type="number" required>
+  Maximum tokens per chunk. Documents are split into batches that fit within this limit.
+</ParamField>
+
+<ParamField path="concurrency" type="number">
+  Maximum number of concurrent extraction tasks in pass 1. Defaults to processing all chunks in parallel.
+</ParamField>
+
+<ParamField path="maxImages" type="number">
+  Maximum number of images per chunk. Useful for controlling vision API costs.
+</ParamField>
+
+<ParamField path="outputInstructions" type="string">
+  Additional instructions to guide the model's output format or behavior.
+</ParamField>
+
+<ParamField path="execute" type="function">
+  Custom retry executor function. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="strict" type="boolean">
+  Enable strict mode for structured output validation. Defaults to `false`.
+</ParamField>
+
+## When to use
+
+- You need the highest extraction quality
+- You have complex documents requiring multiple perspectives
+- You're willing to pay for double processing
+- Initial parallel extraction needs refinement from sequential context
+
+## How it works
+
+1. **Pass 1 - Parallel**: Extracts from all chunks concurrently
+2. **Pass 1 - Merge**: Uses an LLM to merge parallel results
+3. **Pass 2 - Sequential**: Re-processes each chunk sequentially, using pass 1 results as context to refine and improve extraction
+
+## Trade-offs
+
+**Advantages:**
+- Highest extraction quality
+- Combines benefits of both parallel and sequential strategies
+- Second pass can correct mistakes from first pass
+- Fast initial extraction, then refinement
+
+**Limitations:**
+- Highest token usage (2x extraction + merge)
+- Slowest overall processing time
+- Most expensive strategy
+- May be overkill for simple documents
+
+## Performance characteristics
+
+The strategy estimates `batches.length * 2 + 3` steps:
+1. Prepare
+2. Pass 1: Extract from batch 1 through N (parallel)
+3. Pass 1: Merge
+4. Pass 2: Extract from batch 1 through N (sequential)
+5. Complete
+
+## Example with concurrency control
+
+```typescript
+import { extract, doublePass } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts: complexContractArtifacts,
+  schema: contractSchema,
+  strategy: doublePass({
+    model: openai('gpt-4o'),
+    mergeModel: openai('gpt-4o'),
+    chunkSize: 100000,
+    concurrency: 5,
+    maxImages: 10,
+    outputInstructions: 'Extract all clauses, dates, and parties with high precision',
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`[${step}/${total}] ${label}`);
+    },
+  },
+});
+
+console.log('High-quality extraction complete');
+console.log(`Total tokens used: ${result.usage.totalTokens}`);
+```

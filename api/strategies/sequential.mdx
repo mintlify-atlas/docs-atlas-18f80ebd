@@ -1,0 +1,100 @@
+---
+title: sequential()
+description: Sequential extraction strategy that processes chunks one at a time, building results incrementally
+---
+
+The `sequential()` strategy processes document chunks one at a time, passing the accumulated results to each subsequent extraction. This allows the model to build context as it processes the document.
+
+## Usage
+
+```typescript
+import { extract, sequential } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: sequential({
+    model: openai('gpt-4o'),
+    chunkSize: 100000,
+  }),
+});
+```
+
+## Configuration
+
+<ParamField path="model" type="LanguageModel" required>
+  The AI SDK language model to use for extraction.
+</ParamField>
+
+<ParamField path="chunkSize" type="number" required>
+  Maximum tokens per chunk. Documents are split into batches that fit within this limit.
+</ParamField>
+
+<ParamField path="maxImages" type="number">
+  Maximum number of images per chunk. Useful for controlling vision API costs.
+</ParamField>
+
+<ParamField path="outputInstructions" type="string">
+  Additional instructions to guide the model's output format or behavior.
+</ParamField>
+
+<ParamField path="execute" type="function">
+  Custom retry executor function. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="strict" type="boolean">
+  Enable strict mode for structured output validation. Defaults to `false`.
+</ParamField>
+
+## When to use
+
+- You have large documents that exceed context limits
+- Sequential context is important (e.g., narratives, meeting minutes)
+- You want to avoid a separate merge step
+- You can tolerate slower processing than parallel strategies
+
+## Trade-offs
+
+**Advantages:**
+- No separate merge step needed
+- Model sees accumulated context from previous chunks
+- Lower token usage than parallel + merge
+- Deterministic ordering
+
+**Limitations:**
+- Slower than parallel strategies (no concurrency)
+- Later chunks see accumulated data, increasing context size
+- Cannot leverage parallelization
+
+## Performance characteristics
+
+The strategy estimates `batches.length + 2` steps:
+1. Prepare
+2. Extract from batch 1 through N (sequential)
+3. Complete
+
+Processing is sequential, so total time = sum of all chunk processing times.
+
+## Example with image limits
+
+```typescript
+import { extract, sequential } from 'struktur';
+import { anthropic } from '@ai-sdk/anthropic';
+
+const result = await extract({
+  artifacts: documentWithImages,
+  schema: reportSchema,
+  strategy: sequential({
+    model: anthropic('claude-3-5-sonnet-20241022'),
+    chunkSize: 150000,
+    maxImages: 5, // Limit to 5 images per chunk
+    outputInstructions: 'Extract data sequentially, maintaining chronological order',
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Processing: ${step}/${total} - ${label}`);
+    },
+  },
+});
+```

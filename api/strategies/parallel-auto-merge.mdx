@@ -1,0 +1,121 @@
+---
+title: parallelAutoMerge()
+description: Parallel extraction with automatic schema-aware merging and LLM-based deduplication
+---
+
+The `parallelAutoMerge()` strategy processes document chunks in parallel, automatically merges results using schema-aware logic, removes exact duplicates, and uses an LLM to identify and remove semantic duplicates.
+
+## Usage
+
+```typescript
+import { extract, parallelAutoMerge } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallelAutoMerge({
+    model: openai('gpt-4o-mini'),
+    chunkSize: 100000,
+  }),
+});
+```
+
+## Configuration
+
+<ParamField path="model" type="LanguageModel" required>
+  The AI SDK language model to use for extracting from each chunk.
+</ParamField>
+
+<ParamField path="chunkSize" type="number" required>
+  Maximum tokens per chunk. Documents are split into batches that fit within this limit.
+</ParamField>
+
+<ParamField path="concurrency" type="number">
+  Maximum number of concurrent extraction tasks. Defaults to processing all chunks in parallel.
+</ParamField>
+
+<ParamField path="maxImages" type="number">
+  Maximum number of images per chunk. Useful for controlling vision API costs.
+</ParamField>
+
+<ParamField path="outputInstructions" type="string">
+  Additional instructions to guide the model's output format or behavior.
+</ParamField>
+
+<ParamField path="dedupeModel" type="LanguageModel">
+  The AI SDK language model to use for semantic deduplication. Defaults to the extraction `model`.
+</ParamField>
+
+<ParamField path="execute" type="function">
+  Custom retry executor function for extraction. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="dedupeExecute" type="function">
+  Custom retry executor function for deduplication. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="strict" type="boolean">
+  Enable strict mode for structured output validation. Defaults to `false`.
+</ParamField>
+
+## When to use
+
+- You have large documents with potential duplicate data
+- You want fast parallel processing
+- You don't want to write custom merge logic
+- You want automatic deduplication
+
+## How it works
+
+1. **Parallel extraction**: Processes all chunks concurrently
+2. **Smart merge**: Uses `SmartDataMerger` with schema-aware logic to combine results
+3. **Hash-based deduplication**: Removes exact duplicates using hash comparison
+4. **LLM deduplication**: Uses an LLM to identify semantic duplicates and returns paths to remove
+
+## Trade-offs
+
+**Advantages:**
+- Fast parallel processing
+- No custom merge logic needed
+- Automatic duplicate removal
+- Schema-aware merging
+
+**Limitations:**
+- Higher token usage (extractions + dedupe)
+- Dedupe quality depends on model capability
+- Less control over merge strategy
+
+## Performance characteristics
+
+The strategy estimates `batches.length + 3` steps:
+1. Prepare
+2. Extract from batch 1 through N (parallel)
+3. Dedupe
+4. Complete
+
+## Example with custom dedupe model
+
+```typescript
+import { extract, parallelAutoMerge } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts: customerRecordsArtifacts,
+  schema: customersSchema,
+  strategy: parallelAutoMerge({
+    model: openai('gpt-4o-mini'),
+    dedupeModel: openai('gpt-4o'), // Use stronger model for deduplication
+    chunkSize: 100000,
+    concurrency: 10,
+    maxImages: 5,
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`${label}: ${step}/${total}`);
+    },
+  },
+});
+
+console.log(`Extracted ${result.data.customers.length} unique customers`);
+```

@@ -1,0 +1,218 @@
+---
+title: models
+description: List available AI models from configured providers
+---
+
+The `models` command queries providers to list available models, their pricing, and capabilities. This helps you choose the right model for your extraction tasks.
+
+## Usage
+
+```bash
+struktur models [options]
+```
+
+## Options
+
+<ParamField path="--provider" type="string">
+  Query models from a specific provider: `openai`, `anthropic`, `google`, `opencode`, or `openrouter`
+</ParamField>
+
+<ParamField path="--all" type="boolean">
+  Query all supported providers (default behavior)
+</ParamField>
+
+## Examples
+
+### List all models from all providers
+
+```bash
+struktur models
+```
+
+Output:
+```json
+{
+  "providers": [
+    {
+      "provider": "openai",
+      "models": [
+        {
+          "id": "gpt-4o",
+          "name": "GPT-4o",
+          "pricing": {
+            "input": 2.5,
+            "output": 10.0
+          }
+        },
+        {
+          "id": "gpt-4o-mini",
+          "name": "GPT-4o Mini",
+          "pricing": {
+            "input": 0.15,
+            "output": 0.6
+          }
+        }
+      ]
+    },
+    {
+      "provider": "anthropic",
+      "models": [
+        {
+          "id": "claude-4-sonnet",
+          "name": "Claude 4 Sonnet",
+          "pricing": {
+            "input": 3.0,
+            "output": 15.0
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### List models from a specific provider
+
+```bash
+struktur models --provider openai
+```
+
+Output:
+```json
+{
+  "providers": [
+    {
+      "provider": "openai",
+      "models": [
+        {
+          "id": "gpt-4o",
+          "name": "GPT-4o",
+          "pricing": {
+            "input": 2.5,
+            "output": 10.0
+          }
+        },
+        {
+          "id": "gpt-4o-mini",
+          "name": "GPT-4o Mini",
+          "pricing": {
+            "input": 0.15,
+            "output": 0.6
+          }
+        },
+        {
+          "id": "o1",
+          "name": "o1",
+          "pricing": {
+            "input": 15.0,
+            "output": 60.0
+          }
+        },
+        {
+          "id": "o1-mini",
+          "name": "o1 Mini",
+          "pricing": {
+            "input": 3.0,
+            "output": 12.0
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Find the cheapest model
+
+```bash
+struktur models --provider anthropic | \
+  jq '.providers[0].models | sort_by(.pricing.input) | .[0]'
+```
+
+Output:
+```json
+{
+  "id": "claude-3-haiku",
+  "name": "Claude 3 Haiku",
+  "pricing": {
+    "input": 0.25,
+    "output": 1.25
+  }
+}
+```
+
+## Supported providers
+
+- `openai` - OpenAI (GPT-4o, GPT-4o Mini, o1, o1-mini, etc.)
+- `anthropic` - Anthropic (Claude 4 Sonnet, Claude 3.5 Sonnet, Claude 3 Haiku, etc.)
+- `google` - Google Generative AI (Gemini 2.0 Flash, Gemini 1.5 Pro, etc.)
+- `opencode` - OpenCode Zen (multi-provider access)
+- `openrouter` - OpenRouter (multi-provider access)
+
+## Model pricing
+
+Pricing is shown in USD per million tokens:
+
+```json
+{
+  "pricing": {
+    "input": 2.5,   // $2.50 per 1M input tokens
+    "output": 10.0  // $10.00 per 1M output tokens
+  }
+}
+```
+
+## Using model information
+
+### Set the cheapest model as default
+
+```bash
+# Query models, find cheapest, set as default
+CHEAPEST=$(struktur models --provider openai | \
+  jq -r '.providers[0].models | sort_by(.pricing.input) | .[0].id')
+
+struktur auth default --model "openai/$CHEAPEST"
+```
+
+### Compare pricing across providers
+
+```bash
+struktur models | jq '
+  .providers[] | 
+  {
+    provider: .provider,
+    cheapest: (.models | sort_by(.pricing.input) | .[0] | {id, input_price: .pricing.input})
+  }
+'
+```
+
+Output:
+```json
+{
+  "provider": "openai",
+  "cheapest": {
+    "id": "gpt-4o-mini",
+    "input_price": 0.15
+  }
+}
+{
+  "provider": "anthropic",
+  "cheapest": {
+    "id": "claude-3-haiku",
+    "input_price": 0.25
+  }
+}
+{
+  "provider": "google",
+  "cheapest": {
+    "id": "gemini-2.0-flash-exp",
+    "input_price": 0.0
+  }
+}
+```
+
+## Notes
+
+- Model availability and pricing may change. Run `struktur models` to get current information.
+- Some providers offer free tiers or experimental models with $0 pricing.
+- Pricing is for reference only and should be verified with the provider's official documentation.

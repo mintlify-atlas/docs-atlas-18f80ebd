@@ -1,0 +1,77 @@
+---
+title: Introduction
+description: Struktur is a structured data extraction engine that turns pre-parsed artifacts into validated JSON using the Vercel AI SDK.
+---
+
+# Introduction
+
+Struktur is a structured data extraction engine that turns pre-parsed artifacts into validated JSON using the Vercel AI SDK. It chunks content by token budgets, runs strategy-driven workflows, validates with Ajv, and merges or dedupes when needed.
+
+## Key features
+
+- **Strategy-driven extraction** - Choose from simple, parallel, sequential, auto-merge, or double-pass strategies
+- **Token-aware batching** - Automatically chunks content by token budgets with optional image limits
+- **Schema-first validation** - Validates results with Ajv and automatically retries on failure
+- **Smart merging and deduplication** - Schema-aware rules with CRC32 hashing for efficient data processing
+- **Fully typed results** - Uses Ajv `JSONSchemaType<T>` for type-safe extraction results
+
+<Note>
+Struktur operates on pre-parsed artifact DTOs. It does not parse PDFs or HTML directly - it expects normalized JSON inputs.
+</Note>
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Install Struktur with your preferred package manager
+  </Card>
+  <Card
+    title="Quick start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get up and running with a working extraction example
+  </Card>
+  <Card
+    title="Extraction strategies"
+    icon="chess"
+    href="/concepts/strategies"
+  >
+    Learn about the different extraction strategies available
+  </Card>
+  <Card
+    title="API reference"
+    icon="code"
+    href="/api/extract"
+  >
+    Explore the complete API documentation
+  </Card>
+</CardGroup>
+
+## How it works
+
+Struktur follows a clear extraction pipeline:
+
+```
+extract()
+  -> strategy.run()
+     -> batchArtifacts() / splitArtifact()
+        -> prompt builder(s)
+           -> runWithRetries()
+              -> Ajv validation / retry
+              -> merge / dedupe (strategy-specific)
+```
+
+1. **Input artifacts** - Provide pre-parsed JSON artifacts with text and media content
+2. **Select strategy** - Choose an extraction strategy based on your content size and complexity
+3. **Define schema** - Specify the output structure using JSON Schema
+4. **Extract data** - Struktur chunks content, runs LLM extraction, validates results, and merges outputs
+5. **Get typed results** - Receive validated, type-safe extraction results
+
+<Tip>
+For small inputs, start with the `simple` strategy. For larger documents, consider `parallel` or `sequential` strategies with auto-merge capabilities.
+</Tip>

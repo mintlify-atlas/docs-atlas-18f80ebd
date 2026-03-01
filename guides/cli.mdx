@@ -1,0 +1,642 @@
+---
+title: Using the CLI
+description: Extract structured data from the command line with the struktur CLI
+---
+
+The Struktur CLI provides a complete interface for running extractions, managing provider tokens, and querying available models without writing code.
+
+## Installation
+
+The CLI is included with the Struktur package:
+
+```bash
+bun install @mateffy/struktur
+```
+
+Run directly with `bun`:
+
+```bash
+bun struktur --help
+```
+
+Or use the global binary if installed:
+
+```bash
+struktur --help
+```
+
+## Commands
+
+Strukt provides four main commands:
+
+- `extract-file`: Extract structured data (default command)
+- `verify`: Validate artifact JSON format
+- `auth`: Manage provider API tokens
+- `models`: List available models
+
+## extract-file command
+
+The default command for running extractions.
+
+### Basic usage
+
+```bash
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json \
+  --model openai/gpt-4o-mini
+```
+
+### Input options
+
+Strukt accepts multiple input formats:
+
+<CodeGroup>
+
+```bash File
+# Extract from a file
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json
+```
+
+```bash Text
+# Extract from raw text
+struktur extract-file \
+  --text "Your text content here" \
+  --schema schema.json
+```
+
+```bash Stdin
+# Extract from stdin (auto-detected when piped)
+cat document.txt | struktur extract-file --schema schema.json
+
+# Or explicitly
+struktur extract-file \
+  --stdin \
+  --schema schema.json < document.txt
+```
+
+```bash Artifact JSON
+# Use pre-parsed artifact JSON
+struktur extract-file \
+  --artifact artifacts.json \
+  --schema schema.json
+
+# Or from stdin
+cat artifacts.json | struktur extract-file \
+  --artifact - \
+  --schema schema.json
+
+# Or inline
+struktur extract-file \
+  --artifact-json '[{"id":"1","type":"text","contents":[{"text":"..."}]}]' \
+  --schema schema.json
+```
+
+</CodeGroup>
+
+### Schema options
+
+<CodeGroup>
+
+```bash File
+# Schema from file
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json
+```
+
+```bash Inline JSON
+# Inline schema
+struktur extract-file \
+  --input document.pdf \
+  --schema-json '{"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}'
+```
+
+```bash HTTP URL
+# Fetch schema from URL
+struktur extract-file \
+  --input document.pdf \
+  --schema https://example.com/schemas/document.json
+```
+
+</CodeGroup>
+
+### Model selection
+
+```bash
+# Explicit model
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json \
+  --model anthropic/claude-3-5-haiku-20241022
+
+# Use configured default (if set)
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json
+
+# Auto-select cheapest from configured providers
+# (no --model flag, no configured default)
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json
+```
+
+**Model format:** `provider/model-name`
+
+Examples:
+- `openai/gpt-4o-mini`
+- `anthropic/claude-3-5-haiku-20241022`
+- `google/gemini-1.5-flash`
+- `openrouter/anthropic/claude-3.5-sonnet`
+- `opencode/gpt-5-nano`
+
+### Strategy selection
+
+```bash
+# Simple strategy (default)
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json
+
+# Parallel strategy
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json \
+  --strategy parallel \
+  --chunk-size 10000
+
+# Sequential strategy
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json \
+  --strategy sequential \
+  --chunk-size 8000
+
+# Auto-merge strategies
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json \
+  --strategy parallelAutoMerge \
+  --chunk-size 10000
+
+# Double-pass strategies
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json \
+  --strategy doublePass \
+  --chunk-size 10000
+```
+
+**Available strategies:**
+- `simple`: Single-pass extraction (default)
+- `parallel`: Concurrent batches with LLM merge
+- `sequential`: Sequential batches with context
+- `parallelAutoMerge`: Parallel with schema-aware merge
+- `sequentialAutoMerge`: Sequential with schema-aware merge
+- `doublePass`: Parallel then sequential refinement
+- `doublePassAutoMerge`: Auto-merge then sequential refinement
+
+### Output options
+
+```bash
+# Output to stdout (default)
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json
+
+# Output to file
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json \
+  --output result.json
+
+# Pipe to another command
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json | jq '.title'
+```
+
+### Chunk size configuration
+
+For strategies that support chunking:
+
+```bash
+struktur extract-file \
+  --input large-document.pdf \
+  --schema schema.json \
+  --strategy parallel \
+  --chunk-size 15000
+```
+
+**Default chunk size:** 10,000 tokens
+
+Adjust based on:
+- Model context window size
+- Document complexity
+- Cost vs. accuracy tradeoffs
+
+### Complete example
+
+```bash
+struktur extract-file \
+  --input research-paper.pdf \
+  --schema paper-schema.json \
+  --model anthropic/claude-3-5-haiku-20241022 \
+  --strategy parallel \
+  --chunk-size 12000 \
+  --output extracted-data.json
+```
+
+## auth command
+
+Manage API tokens for AI providers.
+
+### auth set
+
+Store a provider token:
+
+<Steps>
+
+<Step title="Set token with command-line argument">
+
+```bash
+struktur auth set --provider openai --token sk-...
+```
+
+</Step>
+
+<Step title="Or read from stdin">
+
+```bash
+echo "sk-..." | struktur auth set --provider openai --token-stdin
+```
+
+</Step>
+
+<Step title="Set as default provider">
+
+```bash
+struktur auth set --provider openai --token sk-... --default
+```
+
+This automatically configures the cheapest model from that provider as your default.
+
+</Step>
+
+</Steps>
+
+**Storage options:**
+
+```bash
+# Auto-detect storage (default)
+struktur auth set --provider openai --token sk-...
+
+# Force keychain storage (macOS only)
+struktur auth set --provider openai --token sk-... --storage keychain
+
+# Force file storage
+struktur auth set --provider openai --token sk-... --storage file
+```
+
+**Supported providers:**
+- `openai`
+- `anthropic`
+- `google`
+- `opencode`
+- `openrouter`
+
+### auth default
+
+Set or update your default model:
+
+```bash
+# Use cheapest model from a provider
+struktur auth default openai
+
+# Use a specific model
+struktur auth default --model anthropic/claude-3-5-haiku-20241022
+```
+
+Output:
+
+```json
+{
+  "defaultModel": "openai/gpt-4o-mini"
+}
+```
+
+### auth get
+
+Retrieve a stored token:
+
+```bash
+# Masked output (default)
+struktur auth get --provider openai
+# Output: sk-ab...xy12
+
+# Raw token
+struktur auth get --provider openai --raw
+# Output: sk-abcdef1234567890...
+```
+
+### auth list
+
+List all configured providers:
+
+```bash
+struktur auth list
+```
+
+Output:
+
+```json
+{
+  "providers": [
+    { "provider": "openai", "storage": "keychain" },
+    { "provider": "anthropic", "storage": "file" },
+    { "provider": "google", "storage": "keychain" }
+  ]
+}
+```
+
+### auth delete
+
+Remove a provider token:
+
+```bash
+struktur auth delete --provider openai
+```
+
+Output:
+
+```json
+{
+  "provider": "openai",
+  "deleted": true
+}
+```
+
+## models command
+
+Query available models from providers.
+
+### List all providers
+
+```bash
+struktur models --all
+```
+
+Output:
+
+```json
+{
+  "providers": [
+    {
+      "provider": "openai",
+      "ok": true,
+      "models": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-3.5-turbo"
+      ]
+    },
+    {
+      "provider": "anthropic",
+      "ok": true,
+      "models": [
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229"
+      ]
+    },
+    {
+      "provider": "google",
+      "ok": false,
+      "error": "No token available"
+    }
+  ]
+}
+```
+
+### List specific provider
+
+```bash
+struktur models --provider openai
+```
+
+Output:
+
+```json
+{
+  "providers": [
+    {
+      "provider": "openai",
+      "ok": true,
+      "models": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-3.5-turbo"
+      ]
+    }
+  ]
+}
+```
+
+## verify command
+
+Validate artifact JSON format.
+
+```bash
+# Verify file
+struktur verify --input artifacts.json
+
+# Verify from stdin
+cat artifacts.json | struktur verify
+```
+
+Output on success:
+
+```json
+{
+  "valid": true,
+  "artifacts": 3
+}
+```
+
+Output on failure:
+
+```
+Error: Invalid artifact format: ...
+```
+
+## Progress indicators
+
+The CLI shows automatic progress bars when running in a TTY:
+
+```
+◈ ▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱ 50% | processing 5/10
+```
+
+Progress is hidden when:
+- Output is redirected to a file
+- Piping to another command
+- Running in non-interactive mode
+
+## Environment variables
+
+The CLI respects standard environment variables:
+
+```bash
+# Provider API keys
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_GENERATIVE_AI_API_KEY="..."
+export OPENROUTER_API_KEY="sk-or-..."
+export OPENCODE_API_KEY="..."
+
+# Config directory (default: ~/.config/struktur)
+export STRUKTUR_CONFIG_DIR="/custom/path"
+
+# Disable keychain on macOS
+export STRUKTUR_DISABLE_KEYCHAIN=1
+
+# Custom keychain service name (default: struktur)
+export STRUKTUR_KEYCHAIN_SERVICE="my-app"
+```
+
+## Complete workflow example
+
+<Steps>
+
+<Step title="Configure your provider">
+
+```bash
+struktur auth set --provider anthropic --token sk-ant-... --default
+```
+
+</Step>
+
+<Step title="Create a schema file">
+
+```json schema.json
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "authors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "abstract": { "type": "string" },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "year": { "type": "number" }
+        },
+        "required": ["title"]
+      }
+    }
+  },
+  "required": ["title", "authors"],
+  "additionalProperties": false
+}
+```
+
+</Step>
+
+<Step title="Run the extraction">
+
+```bash
+struktur extract-file \
+  --input research-paper.pdf \
+  --schema schema.json \
+  --strategy parallel \
+  --chunk-size 12000 \
+  --output result.json
+```
+
+</Step>
+
+<Step title="Process the results">
+
+```bash
+# Pretty-print results
+cat result.json | jq .
+
+# Extract specific fields
+cat result.json | jq '.title, .authors'
+
+# Count citations
+cat result.json | jq '.citations | length'
+```
+
+</Step>
+
+</Steps>
+
+## Error handling
+
+The CLI exits with status code 1 on errors and writes error messages to stderr:
+
+```bash
+struktur extract-file --input missing.pdf --schema schema.json
+# Error: ENOENT: no such file or directory
+# Exit code: 1
+
+struktur auth get --provider unconfigured
+# Error: No token stored for provider: unconfigured
+# Exit code: 1
+```
+
+This allows for proper error handling in scripts:
+
+```bash
+if struktur extract-file --input doc.pdf --schema schema.json > output.json; then
+  echo "Extraction succeeded"
+  cat output.json | jq .
+else
+  echo "Extraction failed"
+  exit 1
+fi
+```
+
+## Tips and tricks
+
+### Batch processing
+
+```bash
+for file in documents/*.pdf; do
+  name=$(basename "$file" .pdf)
+  struktur extract-file \
+    --input "$file" \
+    --schema schema.json \
+    --output "results/${name}.json"
+done
+```
+
+### Using with jq for schema generation
+
+```bash
+# Generate schema from example JSON
+echo '{"title": "Example", "count": 42}' | \
+  jq '{type: "object", properties: (to_entries | map({key: .key, value: {type: (.value | type)}}) | from_entries), required: keys}' > schema.json
+```
+
+### Piping between commands
+
+```bash
+# Extract, then filter, then format
+struktur extract-file \
+  --input document.pdf \
+  --schema schema.json | \
+  jq '.citations[] | select(.year > 2020)' | \
+  jq -s '.' > recent-citations.json
+```

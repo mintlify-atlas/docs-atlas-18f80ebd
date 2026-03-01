@@ -1,0 +1,127 @@
+---
+title: doublePassAutoMerge()
+description: Two-pass extraction strategy with automatic schema-aware merging and LLM-based deduplication
+---
+
+The `doublePassAutoMerge()` strategy performs extraction in two passes: first, it processes chunks in parallel with automatic merging and deduplication; second, it processes chunks sequentially using the deduplicated result as context to refine the extraction.
+
+## Usage
+
+```typescript
+import { extract, doublePassAutoMerge } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: doublePassAutoMerge({
+    model: openai('gpt-4o'),
+    chunkSize: 100000,
+  }),
+});
+```
+
+## Configuration
+
+<ParamField path="model" type="LanguageModel" required>
+  The AI SDK language model to use for extraction in both passes.
+</ParamField>
+
+<ParamField path="chunkSize" type="number" required>
+  Maximum tokens per chunk. Documents are split into batches that fit within this limit.
+</ParamField>
+
+<ParamField path="concurrency" type="number">
+  Maximum number of concurrent extraction tasks in pass 1. Defaults to processing all chunks in parallel.
+</ParamField>
+
+<ParamField path="maxImages" type="number">
+  Maximum number of images per chunk. Useful for controlling vision API costs.
+</ParamField>
+
+<ParamField path="outputInstructions" type="string">
+  Additional instructions to guide the model's output format or behavior.
+</ParamField>
+
+<ParamField path="dedupeModel" type="LanguageModel">
+  The AI SDK language model to use for semantic deduplication. Defaults to the extraction `model`.
+</ParamField>
+
+<ParamField path="execute" type="function">
+  Custom retry executor function for extraction. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="dedupeExecute" type="function">
+  Custom retry executor function for deduplication. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="strict" type="boolean">
+  Enable strict mode for structured output validation. Defaults to `false`.
+</ParamField>
+
+## When to use
+
+- You need the highest extraction quality with automatic deduplication
+- You have complex documents with duplicate data
+- You don't want to write custom merge logic
+- You're willing to pay for double processing plus deduplication
+
+## How it works
+
+1. **Pass 1 - Parallel**: Extracts from all chunks concurrently
+2. **Pass 1 - Auto-merge**: Uses `SmartDataMerger` with schema-aware logic
+3. **Pass 1 - Dedupe**: Removes exact duplicates, then uses LLM to find semantic duplicates
+4. **Pass 2 - Sequential**: Re-processes each chunk sequentially, using pass 1 deduplicated results as context to refine extraction
+
+## Trade-offs
+
+**Advantages:**
+- Highest extraction quality
+- Automatic duplicate removal
+- No custom merge logic needed
+- Schema-aware merging
+- Second pass can correct mistakes and add missing data
+
+**Limitations:**
+- Highest token usage (2x extraction + dedupe)
+- Slowest overall processing time
+- Most expensive strategy
+- Less control over merge strategy
+
+## Performance characteristics
+
+The strategy estimates `batches.length * 2 + 3` steps:
+1. Prepare
+2. Pass 1: Extract from batch 1 through N (parallel)
+3. Pass 1: Dedupe
+4. Pass 2: Extract from batch 1 through N (sequential)
+5. Complete
+
+## Example with custom dedupe model
+
+```typescript
+import { extract, doublePassAutoMerge } from 'struktur';
+import { anthropic } from '@ai-sdk/anthropic';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts: medicalRecordsArtifacts,
+  schema: patientRecordsSchema,
+  strategy: doublePassAutoMerge({
+    model: anthropic('claude-3-5-sonnet-20241022'),
+    dedupeModel: openai('gpt-4o'),
+    chunkSize: 150000,
+    concurrency: 8,
+    maxImages: 5,
+    outputInstructions: 'Extract patient data with high accuracy, maintaining medical terminology',
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Progress: ${step}/${total} - ${label}`);
+    },
+  },
+});
+
+console.log(`Extracted ${result.data.patients.length} unique patient records`);
+console.log(`Total cost: ${result.usage.totalTokens} tokens`);
+```

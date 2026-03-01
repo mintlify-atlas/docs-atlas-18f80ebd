@@ -1,0 +1,364 @@
+---
+title: Extraction strategies
+description: Learn about Struktur's seven extraction strategies for different workloads and quality requirements
+---
+
+Strategies orchestrate how Struktur processes artifacts, chunks content, runs LLM calls, and merges results. Each strategy implements a different workflow optimized for specific use cases.
+
+## Strategy interface
+
+All strategies implement the `ExtractionStrategy<T>` interface:
+
+```typescript
+export interface ExtractionStrategy<T> {
+  name: string;
+  run(options: ExtractionOptions<T>): Promise<ExtractionResult<T>>;
+  getEstimatedSteps?: (artifacts: Artifact[]) => number;
+}
+```
+
+Strategies are responsible for:
+
+- Chunking artifacts into token budgets
+- Building prompts for extraction and merging
+- Running LLM calls with validation retries
+- Merging or deduplicating results
+- Emitting progress events via `onStep`
+
+## Available strategies
+
+Struktur provides seven built-in strategies:
+
+### Simple
+
+Single-shot extraction for small inputs that fit in one LLM call.
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: google("gemini-2.0-flash-exp")
+  })
+});
+```
+
+**Best for**: Small documents (< 10K tokens), single-page content, fast prototyping.
+
+**Process**:
+1. Build extraction prompt with all artifacts
+2. Run single LLM call
+3. Validate and return
+
+### Parallel
+
+Concurrent batch processing with LLM-based merge.
+
+```typescript
+import { extract, parallel } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-2.0-flash-exp"),
+    mergeModel: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000,
+    concurrency: 4
+  })
+});
+```
+
+**Best for**: Large documents where speed matters, workloads that benefit from parallelization.
+
+**Process**:
+1. Split artifacts into batches based on `chunkSize`
+2. Process batches concurrently (up to `concurrency` limit)
+3. Merge all results using LLM with merge prompt
+
+**Options**:
+- `model`: Base extraction model
+- `mergeModel`: Model for merging batch results
+- `chunkSize`: Token budget per batch
+- `concurrency`: Max parallel batches (default: all batches)
+- `maxImages`: Optional image limit per batch
+- `outputInstructions`: Extra system instructions
+
+### Sequential
+
+Processes batches in order, passing context between chunks.
+
+```typescript
+import { extract, sequential } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: sequential({
+    model: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000
+  })
+});
+```
+
+**Best for**: Documents where order matters, narratives, chronological data.
+
+**Process**:
+1. Split artifacts into batches
+2. Process first batch
+3. For each subsequent batch, pass previous result as context
+4. Return final accumulated result
+
+From the source code:
+
+```typescript
+for (const [index, batch] of batches.entries()) {
+  const previousData = currentData ? JSON.stringify(currentData) : "{}";
+  const prompt = buildSequentialPrompt(
+    batch,
+    schema,
+    previousData,
+    this.config.outputInstructions
+  );
+
+  const result = await extractWithPrompt<T>({
+    model: this.config.model,
+    schema: options.schema,
+    system: prompt.system,
+    user: prompt.user,
+    artifacts: batch,
+    events: options.events
+  });
+
+  currentData = result.data;
+}
+```
+
+### Parallel auto-merge
+
+Concurrent processing with schema-aware merge and hash-based deduplication.
+
+```typescript
+import { extract, parallelAutoMerge } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallelAutoMerge({
+    model: google("gemini-2.0-flash-exp"),
+    dedupeModel: google("gemini-2.0-flash-exp"), // optional
+    chunkSize: 10_000,
+    concurrency: 4
+  })
+});
+```
+
+**Best for**: Extracting lists with potential duplicates, high-volume parallel workloads.
+
+**Process**:
+1. Process batches concurrently
+2. Schema-aware merge (arrays concatenate, objects merge, scalars prefer new)
+3. Hash-based exact duplicate removal
+4. LLM deduplication pass to find semantic duplicates
+
+The schema-aware merge logic from `SmartDataMerger`:
+
+```typescript
+for (const [key, propSchema] of Object.entries(properties)) {
+  if (isArraySchema(propSchema)) {
+    merged[key] = [
+      ...(Array.isArray(currentValue) ? currentValue : []),
+      ...(Array.isArray(newValue) ? newValue : [])
+    ];
+  } else if (isObjectSchema(propSchema)) {
+    merged[key] = { ...currentValue, ...newValue };
+  } else {
+    merged[key] = newValue ?? currentValue;
+  }
+}
+```
+
+### Sequential auto-merge
+
+Sequential processing with auto-merge and deduplication.
+
+```typescript
+import { extract, sequentialAutoMerge } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: sequentialAutoMerge({
+    model: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000
+  })
+});
+```
+
+**Best for**: Ordered documents with potential duplicates.
+
+**Process**: Same as parallel auto-merge, but batches are processed sequentially.
+
+### Double pass
+
+Two-phase extraction: parallel first pass, sequential refinement.
+
+```typescript
+import { extract, doublePass } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: doublePass({
+    model: google("gemini-2.0-flash-exp"),
+    mergeModel: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000,
+    concurrency: 4
+  })
+});
+```
+
+**Best for**: High-quality extraction where accuracy matters more than speed.
+
+**Process**:
+1. **Pass 1**: Parallel extraction and merge (like `parallel`)
+2. **Pass 2**: Sequential refinement through all batches with merged context
+
+Estimated steps: `batches.length * 2 + 3`
+
+### Double pass auto-merge
+
+Combines double-pass with auto-merge deduplication.
+
+```typescript
+import { extract, doublePassAutoMerge } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: doublePassAutoMerge({
+    model: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000,
+    concurrency: 4
+  })
+});
+```
+
+**Best for**: Maximum quality with deduplication on large, complex datasets.
+
+**Process**:
+1. Parallel auto-merge (extract + merge + dedupe)
+2. Sequential refinement pass
+
+## Common configuration
+
+Most strategies share these options:
+
+- **model**: Base extraction model (required)
+- **chunkSize**: Token budget per batch (required for non-simple strategies)
+- **maxImages**: Optional image limit per batch
+- **outputInstructions**: Extra instructions appended to system prompt
+- **strict**: Enable strict schema validation (for compatible models)
+- **execute**: Custom retry executor (for testing)
+
+Merge-based strategies add:
+
+- **mergeModel**: Model for LLM-based merging
+
+Auto-merge strategies add:
+
+- **dedupeModel**: Model for deduplication (defaults to `model`)
+- **dedupeExecute**: Custom executor for dedupe pass
+
+## Progress tracking
+
+Strategies emit `onStep` events for progress tracking:
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({ /* ... */ }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Step ${step}/${total}: ${label}`);
+    }
+  }
+});
+```
+
+Output:
+```
+Step 1/8: start
+Step 2/8: batch 1/4
+Step 3/8: batch 2/4
+Step 4/8: batch 3/4
+Step 5/8: batch 4/4
+Step 6/8: merge
+Step 8/8: complete
+```
+
+Estimated steps are calculated by `getEstimatedSteps(artifacts)`:
+
+```typescript
+getEstimatedSteps(artifacts: Artifact[]): number {
+  const batches = getBatches(artifacts, {
+    maxTokens: this.config.chunkSize,
+    maxImages: this.config.maxImages
+  });
+  return batches.length + 3; // batches + merge + start + complete
+}
+```
+
+## Choosing a strategy
+
+<Steps>
+  <Step title="Assess input size">
+    If artifacts fit in a single call (< 10K tokens), use `simple`.
+  </Step>
+  
+  <Step title="Consider order">
+    If document order matters (narratives, chronological data), use `sequential` or `sequentialAutoMerge`.
+  </Step>
+  
+  <Step title="Evaluate speed vs quality">
+    - For speed: `parallel` or `parallelAutoMerge`
+    - For quality: `doublePass` or `doublePassAutoMerge`
+  </Step>
+  
+  <Step title="Check for duplicates">
+    If extracting lists with potential duplicates, use an auto-merge strategy.
+  </Step>
+</Steps>
+
+## Custom strategies
+
+You can implement custom strategies by following the `ExtractionStrategy<T>` interface:
+
+```typescript
+import type { ExtractionStrategy, ExtractionOptions, ExtractionResult } from "@mateffy/struktur";
+
+class CustomStrategy<T> implements ExtractionStrategy<T> {
+  name = "custom";
+
+  async run(options: ExtractionOptions<T>): Promise<ExtractionResult<T>> {
+    // Your extraction logic here
+    return { data, usage };
+  }
+
+  getEstimatedSteps(artifacts: Artifact[]): number {
+    return 5; // Estimate for progress tracking
+  }
+}
+```
+
+See the source code in `src/strategies/` for implementation patterns.

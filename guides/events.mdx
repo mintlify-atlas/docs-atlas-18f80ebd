@@ -1,0 +1,348 @@
+---
+title: Using event hooks
+description: Monitor extraction progress and debug with event callbacks
+---
+
+Strukt provides event hooks that let you monitor extraction progress, inspect model messages, track token usage, and build custom progress indicators.
+
+## Available event hooks
+
+Strukt supports four event types:
+
+- **onStep**: Fired at major strategy milestones
+- **onProgress**: Fired during batch processing with current/total counts
+- **onMessage**: Fired for each LLM message (system, user, assistant)
+- **onTokenUsage**: Fired after each LLM call with token usage
+
+## Basic usage
+
+Pass an `events` object to the `extract()` function:
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({ model: google("gemini-1.5-flash") }),
+  events: {
+    onStep: (info) => {
+      console.log(`Step ${info.step}/${info.total}: ${info.label}`);
+    },
+    onMessage: (info) => {
+      console.log(`${info.role}:`, info.content);
+    },
+    onTokenUsage: (info) => {
+      console.log(`Tokens: ${info.totalTokens} (in: ${info.inputTokens}, out: ${info.outputTokens})`);
+    }
+  }
+});
+```
+
+## onStep hook
+
+Tracks major milestones in the extraction strategy.
+
+### Signature
+
+```typescript
+type StepInfo = {
+  step: number;      // Current step number (1-indexed)
+  total?: number;    // Total steps (if known)
+  label?: string;    // Step description
+};
+
+onStep?: (info: StepInfo) => void | Promise<void>;
+```
+
+### Example usage
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-1.5-flash"),
+    mergeModel: google("gemini-1.5-flash"),
+    chunkSize: 10_000
+  }),
+  events: {
+    onStep: (info) => {
+      if (info.total) {
+        const percent = Math.round((info.step / info.total) * 100);
+        console.log(`[${percent}%] ${info.label}`);
+      } else {
+        console.log(`Step ${info.step}: ${info.label}`);
+      }
+    }
+  }
+});
+```
+
+### Step labels by strategy
+
+**Simple:**
+- `start`: Extraction begins
+- `extract`: Processing single pass
+- `complete`: Extraction finished
+
+**Parallel:**
+- `start`: Strategy begins
+- `batch 1/N`, `batch 2/N`, ...: Each batch completes
+- `merge`: Merging batch results
+- `complete`: Strategy finished
+
+**Sequential:**
+- `start`: Strategy begins
+- `batch 1/N`, `batch 2/N`, ...: Each batch completes
+- `complete`: Strategy finished
+
+**Auto-merge strategies:**
+- Same as parallel/sequential, plus:
+- `auto-merge`: Schema-aware merge step
+- `dedupe`: Deduplication step
+
+**Double-pass strategies:**
+- All steps from first pass
+- All steps from second pass
+
+## onProgress hook
+
+Tracks progress during batch processing with precise counts.
+
+### Signature
+
+```typescript
+type ProgressInfo = {
+  current: number;   // Current item/batch number
+  total: number;     // Total items/batches
+  percent?: number;  // Optional percentage (0-100)
+};
+
+onProgress?: (info: ProgressInfo) => void | Promise<void>;
+```
+
+### Example usage
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-1.5-flash"),
+    mergeModel: google("gemini-1.5-flash"),
+    chunkSize: 10_000
+  }),
+  events: {
+    onProgress: (info) => {
+      const percent = info.percent ?? Math.round((info.current / info.total) * 100);
+      console.log(`Processing: ${info.current}/${info.total} (${percent}%)`);
+    }
+  }
+});
+```
+
+## onMessage hook
+
+Inspects all messages sent to and received from the LLM.
+
+### Signature
+
+```typescript
+type MessageInfo = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: unknown;  // Message content (varies by role)
+};
+
+onMessage?: (info: MessageInfo) => void | Promise<void>;
+```
+
+### Example usage
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({ model: google("gemini-1.5-flash") }),
+  events: {
+    onMessage: (info) => {
+      if (info.role === "system") {
+        console.log("System prompt:", info.content);
+      } else if (info.role === "user") {
+        console.log("User message:", info.content);
+      } else if (info.role === "assistant") {
+        console.log("Assistant response:", info.content);
+      }
+    }
+  }
+});
+```
+
+### Debugging validation retries
+
+The `onMessage` hook is particularly useful for debugging schema validation failures:
+
+```typescript
+let attemptCount = 0;
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({ model: google("gemini-1.5-flash") }),
+  events: {
+    onMessage: (info) => {
+      if (info.role === "user") {
+        attemptCount++;
+        console.log(`\nAttempt ${attemptCount}`);
+        
+        // Check if this is a retry with validation errors
+        const content = info.content as string;
+        if (content.includes("validation errors")) {
+          console.log("Validation failed, retrying with feedback:");
+          console.log(content);
+        }
+      } else if (info.role === "assistant") {
+        console.log("Model output:", JSON.stringify(info.content, null, 2));
+      }
+    }
+  }
+});
+```
+
+## onTokenUsage hook
+
+Tracks token consumption for each LLM call.
+
+### Signature
+
+```typescript
+type TokenUsageInfo = {
+  inputTokens: number;   // Prompt tokens
+  outputTokens: number;  // Completion tokens
+  totalTokens: number;   // Sum of input and output
+  model?: string;        // Model identifier
+};
+
+onTokenUsage?: (info: TokenUsageInfo) => void | Promise<void>;
+```
+
+### Example usage
+
+```typescript
+let totalCost = 0;
+const GPT4O_MINI_INPUT_COST = 0.150 / 1_000_000;  // $0.150 per 1M tokens
+const GPT4O_MINI_OUTPUT_COST = 0.600 / 1_000_000; // $0.600 per 1M tokens
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: openai("gpt-4o-mini"),
+    mergeModel: openai("gpt-4o-mini"),
+    chunkSize: 10_000
+  }),
+  events: {
+    onTokenUsage: (info) => {
+      const cost = (
+        info.inputTokens * GPT4O_MINI_INPUT_COST +
+        info.outputTokens * GPT4O_MINI_OUTPUT_COST
+      );
+      totalCost += cost;
+      
+      console.log(`Tokens: ${info.totalTokens} ($${cost.toFixed(4)})`);
+      console.log(`Running total: $${totalCost.toFixed(4)}`);
+    }
+  }
+});
+
+console.log(`\nFinal cost: $${totalCost.toFixed(4)}`);
+```
+
+## Building a progress bar
+
+Combine `onStep` and `onProgress` to build rich progress indicators:
+
+```typescript
+import cliProgress from "cli-progress";
+
+const progressBar = new cliProgress.SingleBar({
+  format: "◈ {bar} {percentage}% | {message}",
+  barCompleteChar: "▰",
+  barIncompleteChar: "▱"
+}, cliProgress.Presets.shades_classic);
+
+progressBar.start(100, 0, { message: "starting" });
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: google("gemini-1.5-flash"),
+    mergeModel: google("gemini-1.5-flash"),
+    chunkSize: 10_000
+  }),
+  events: {
+    onStep: (info) => {
+      if (info.total) {
+        const value = Math.round((info.step / info.total) * 100);
+        progressBar.update(value, { message: info.label ?? "working" });
+      }
+    },
+    onProgress: (info) => {
+      const percent = info.percent ?? Math.round((info.current / info.total) * 100);
+      progressBar.update(percent, {
+        message: `processing ${info.current}/${info.total}`
+      });
+    }
+  }
+});
+
+progressBar.update(100, { message: "complete" });
+progressBar.stop();
+```
+
+This is exactly how the CLI implements progress tracking (see `src/cli.ts:326-408`).
+
+## Async event handlers
+
+All event hooks support async handlers:
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({ model: google("gemini-1.5-flash") }),
+  events: {
+    onStep: async (info) => {
+      // Log to external service
+      await fetch("https://api.example.com/progress", {
+        method: "POST",
+        body: JSON.stringify(info)
+      });
+    },
+    onTokenUsage: async (info) => {
+      // Store in database
+      await db.usage.create({
+        data: {
+          model: info.model,
+          inputTokens: info.inputTokens,
+          outputTokens: info.outputTokens,
+          timestamp: new Date()
+        }
+      });
+    }
+  }
+});
+```
+
+## Event hook reference
+
+| Hook | When fired | Use case |
+|------|-----------|----------|
+| `onStep` | Major strategy milestones | High-level progress tracking |
+| `onProgress` | During batch processing | Detailed progress bars |
+| `onMessage` | Each LLM message | Debugging, logging prompts |
+| `onTokenUsage` | After each LLM call | Cost tracking, usage monitoring |
+
+All hooks are optional and can be used independently or together based on your needs.

@@ -1,0 +1,150 @@
+---
+title: fileToArtifact
+description: Convert file buffers to artifacts using MIME type detection and custom providers
+---
+
+The `fileToArtifact` function converts a `Buffer` into an `Artifact` object using MIME type-based provider lookup and fallback strategies.
+
+## Function signature
+
+```typescript
+export const fileToArtifact = async (
+  buffer: Buffer,
+  options: FileToArtifactOptions
+): Promise<Artifact>
+```
+
+## Parameters
+
+<ParamField path="buffer" type="Buffer" required>
+  The file contents as a Node.js Buffer
+</ParamField>
+
+<ParamField path="options" type="FileToArtifactOptions" required>
+  Configuration for the conversion process
+  
+  <Expandable title="properties">
+    <ParamField path="mimeType" type="string" required>
+      The MIME type of the file (e.g., `"text/plain"`, `"image/png"`, `"application/pdf"`)
+    </ParamField>
+    
+    <ParamField path="providers" type="ArtifactProviders">
+      Optional custom provider registry for handling specific MIME types. Falls back to `defaultArtifactProviders` if not provided.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="artifact" type="Artifact">
+  A constructed artifact with auto-generated ID and type based on the MIME type
+</ResponseField>
+
+## Behavior
+
+The function uses the following resolution strategy:
+
+1. **Custom provider lookup**: Checks `options.providers` or `defaultArtifactProviders` for a registered handler for the exact MIME type
+2. **Text fallback**: If MIME type starts with `text/`, creates a text artifact with the buffer decoded as UTF-8
+3. **Image fallback**: If MIME type starts with `image/`, creates an image artifact with the buffer as media content
+4. **Error**: Throws if no provider is found and the MIME type doesn't match text or image patterns
+
+### Default artifacts
+
+When no custom provider is registered:
+
+**Text artifacts** (`text/*`):
+```typescript
+{
+  id: "artifact-{uuid}",
+  type: "text",
+  raw: async () => buffer,
+  contents: [{ text: buffer.toString() }]
+}
+```
+
+**Image artifacts** (`image/*`):
+```typescript
+{
+  id: "artifact-{uuid}",
+  type: "image",
+  raw: async () => buffer,
+  contents: [{ media: [{ type: "image", contents: buffer }] }]
+}
+```
+
+## Example
+
+### Basic text file
+
+```typescript
+import { fileToArtifact } from "struktur";
+
+const buffer = Buffer.from("Hello, world!");
+const artifact = await fileToArtifact(buffer, {
+  mimeType: "text/plain",
+});
+
+console.log(artifact.type); // "text"
+console.log(artifact.contents[0]?.text); // "Hello, world!"
+```
+
+### Image file
+
+```typescript
+import { readFile } from "fs/promises";
+import { fileToArtifact } from "struktur";
+
+const buffer = await readFile("screenshot.png");
+const artifact = await fileToArtifact(buffer, {
+  mimeType: "image/png",
+});
+
+console.log(artifact.type); // "image"
+console.log(artifact.contents[0]?.media?.length); // 1
+```
+
+### Custom provider
+
+```typescript
+import { fileToArtifact } from "struktur";
+import type { ArtifactProviders } from "struktur";
+
+const providers: ArtifactProviders = {
+  "application/pdf": async (buffer) => ({
+    id: "pdf-123",
+    type: "pdf",
+    raw: async () => buffer,
+    contents: [
+      { page: 1, text: "Extracted text from page 1" },
+      { page: 2, text: "Extracted text from page 2" },
+    ],
+  }),
+};
+
+const buffer = await readFile("document.pdf");
+const artifact = await fileToArtifact(buffer, {
+  mimeType: "application/pdf",
+  providers,
+});
+
+console.log(artifact.id); // "pdf-123"
+console.log(artifact.contents.length); // 2
+```
+
+## Error handling
+
+The function throws an error when no provider is registered for non-text, non-image MIME types:
+
+```typescript
+try {
+  await fileToArtifact(buffer, { mimeType: "application/x-custom" });
+} catch (error) {
+  console.error(error.message);
+  // "No artifact provider registered for application/x-custom"
+}
+```
+
+## Source
+
+Implementation: `src/artifacts/fileToArtifact.ts:23`

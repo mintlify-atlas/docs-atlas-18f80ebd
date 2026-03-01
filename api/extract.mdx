@@ -1,0 +1,233 @@
+---
+title: extract()
+description: The core function for extracting structured data from artifacts using a strategy-driven approach.
+---
+
+## Overview
+
+The `extract()` function is the primary API for Struktur. It takes artifacts, a JSON schema, and an extraction strategy, then returns validated, structured data.
+
+## Function signature
+
+```typescript
+export const extract = async <T>(
+  options: ExtractionOptions<T>,
+): Promise<ExtractionResult<T>>
+```
+
+## Parameters
+
+<ParamField path="options" type="ExtractionOptions<T>" required>
+  Configuration object for the extraction process.
+  
+  <Expandable title="properties">
+    <ParamField path="artifacts" type="Artifact[]" required>
+      Array of artifacts to extract data from. Each artifact represents a pre-parsed document with text and optional media content.
+    </ParamField>
+    
+    <ParamField path="schema" type="TypedJSONSchema<T> | AnyJSONSchema" required>
+      JSON Schema definition for the output type. Use `JSONSchemaType<T>` from Ajv for type-safe results.
+    </ParamField>
+    
+    <ParamField path="strategy" type="ExtractionStrategy<T>" required>
+      The extraction strategy to use (e.g., `simple()`, `parallel()`, `sequential()`). Strategies define how artifacts are chunked, processed, and merged.
+    </ParamField>
+    
+    <ParamField path="events" type="ExtractionEvents" default="undefined">
+      Optional event handlers for monitoring extraction progress.
+      
+      <Expandable title="properties">
+        <ParamField path="onStep" type="(info: StepInfo) => void | Promise<void>">
+          Called at each major step of the extraction process.
+          
+          <Expandable title="StepInfo properties">
+            <ParamField path="step" type="number" required>
+              Current step number (1-indexed).
+            </ParamField>
+            <ParamField path="total" type="number">
+              Total estimated steps for this strategy.
+            </ParamField>
+            <ParamField path="label" type="string">
+              Human-readable label (e.g., "start", "extract", "merge", "complete").
+            </ParamField>
+          </Expandable>
+        </ParamField>
+        
+        <ParamField path="onMessage" type="(info: MessageInfo) => void | Promise<void>">
+          Called when messages are exchanged with the LLM.
+          
+          <Expandable title="MessageInfo properties">
+            <ParamField path="role" type="'system' | 'user' | 'assistant' | 'tool'" required>
+              The role of the message sender.
+            </ParamField>
+            <ParamField path="content" type="unknown" required>
+              The message content.
+            </ParamField>
+          </Expandable>
+        </ParamField>
+        
+        <ParamField path="onProgress" type="(info: ProgressInfo) => void | Promise<void>">
+          Called during chunking or batch processing.
+          
+          <Expandable title="ProgressInfo properties">
+            <ParamField path="current" type="number" required>
+              Current progress count.
+            </ParamField>
+            <ParamField path="total" type="number" required>
+              Total items to process.
+            </ParamField>
+            <ParamField path="percent" type="number">
+              Optional percentage (0-100).
+            </ParamField>
+          </Expandable>
+        </ParamField>
+        
+        <ParamField path="onTokenUsage" type="(info: TokenUsageInfo) => void | Promise<void>">
+          Called after each LLM call with token usage information.
+          
+          <Expandable title="TokenUsageInfo properties">
+            <ParamField path="inputTokens" type="number" required>
+              Number of input tokens used.
+            </ParamField>
+            <ParamField path="outputTokens" type="number" required>
+              Number of output tokens generated.
+            </ParamField>
+            <ParamField path="totalTokens" type="number" required>
+              Total tokens (input + output).
+            </ParamField>
+            <ParamField path="model" type="string">
+              Model identifier that was used.
+            </ParamField>
+          </Expandable>
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="ExtractionResult<T>" type="Promise<ExtractionResult<T>>">
+  A promise that resolves to the extraction result.
+  
+  <Expandable title="properties">
+    <ResponseField name="data" type="T" required>
+      The extracted data, validated against the provided schema. If extraction fails, this will be `null` (cast to `T`).
+    </ResponseField>
+    
+    <ResponseField name="usage" type="Usage" required>
+      Token usage statistics for the extraction.
+      
+      <Expandable title="properties">
+        <ResponseField name="inputTokens" type="number" required>
+          Total input tokens consumed across all LLM calls.
+        </ResponseField>
+        <ResponseField name="outputTokens" type="number" required>
+          Total output tokens generated across all LLM calls.
+        </ResponseField>
+        <ResponseField name="totalTokens" type="number" required>
+          Sum of input and output tokens.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="error" type="Error">
+      Present if the extraction failed. When an error occurs, `data` will be `null` and `usage` will show zero tokens.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Basic example
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+import { google } from "@ai-sdk/google";
+
+type Output = { title: string; description: string };
+
+const schema: JSONSchemaType<Output> = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    description: { type: "string" },
+  },
+  required: ["title", "description"],
+  additionalProperties: false,
+};
+
+const result = await extract({
+  artifacts: [myArtifact],
+  schema,
+  strategy: simple({ model: google("gemini-2.0-flash-exp") }),
+});
+
+if (result.error) {
+  console.error("Extraction failed:", result.error);
+} else {
+  console.log(result.data.title);
+  console.log("Used", result.usage.totalTokens, "tokens");
+}
+```
+
+## Parallel extraction example
+
+```typescript
+import { extract, parallel } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts: multiPageDocument,
+  schema,
+  strategy: parallel({
+    model: google("gemini-2.0-flash-exp"),
+    mergeModel: google("gemini-2.0-flash-exp"),
+    chunkSize: 10_000,
+    concurrency: 4,
+  }),
+});
+```
+
+## With event handlers
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({ model }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Step ${step}/${total}: ${label}`);
+    },
+    onTokenUsage: ({ inputTokens, outputTokens, model }) => {
+      console.log(`${model}: ${inputTokens} in, ${outputTokens} out`);
+    },
+  },
+});
+```
+
+## Error handling
+
+The `extract()` function catches all errors and returns them in the result object rather than throwing:
+
+```typescript
+const result = await extract({ artifacts, schema, strategy });
+
+if (result.error) {
+  // Extraction failed - handle the error
+  console.error("Failed:", result.error.message);
+  // result.data will be null (cast to T)
+  // result.usage will show { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+} else {
+  // Success - use result.data
+  console.log(result.data);
+}
+```
+
+## See also
+
+- [Types](/api/types) - Core TypeScript types
+- [Strategies](/strategies/overview) - Available extraction strategies
+- [Artifacts](/core-concepts/artifacts) - Working with artifacts

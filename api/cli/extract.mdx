@@ -1,0 +1,182 @@
+---
+title: extract-file
+description: Extract structured data from files and text using AI models
+---
+
+The `extract-file` command (or simply `struktur` with no command) processes input files, text, or artifacts and extracts structured data according to a JSON schema using AI models.
+
+## Usage
+
+```bash
+struktur extract-file [options]
+struktur [options]  # extract-file is the default command
+```
+
+## Input options
+
+You must specify exactly one input source:
+
+<ParamField path="--input" type="string">
+  Path to an input file to parse and extract from
+</ParamField>
+
+<ParamField path="--text" type="string">
+  Raw text input to extract from
+</ParamField>
+
+<ParamField path="--stdin" type="boolean">
+  Read raw text from stdin (auto-detected when piped)
+</ParamField>
+
+<ParamField path="--artifact" type="string">
+  Path to artifact JSON file, or `-` to read from stdin
+</ParamField>
+
+<ParamField path="--artifact-json" type="string">
+  Artifact JSON as an inline string
+</ParamField>
+
+## Schema options
+
+You must specify a JSON schema for extraction:
+
+<ParamField path="--schema" type="string" required>
+  Path to JSON schema file or HTTP(S) URL. Remote schemas are fetched with `application/schema+json` accept header.
+</ParamField>
+
+<ParamField path="--schema-json" type="string" required>
+  JSON schema as an inline string
+</ParamField>
+
+## Model and strategy options
+
+<ParamField path="--model" type="string">
+  Model identifier in the format `provider/model` (e.g., `openai/gpt-4o`, `anthropic/claude-4-sonnet`). If not specified, uses the configured default model or the cheapest model from the first configured provider.
+</ParamField>
+
+<ParamField path="--strategy" type="string" default="simple">
+  Extraction strategy to use. Available strategies:
+  - `simple` - Single-pass extraction (default)
+  - `parallel` - Parallel chunked extraction with merge
+  - `sequential` - Sequential chunked extraction
+  - `parallelAutoMerge` - Parallel chunks with automatic deduplication
+  - `sequentialAutoMerge` - Sequential chunks with automatic deduplication
+  - `doublePass` - Two-pass extraction with merge
+  - `doublePassAutoMerge` - Two-pass extraction with automatic deduplication
+</ParamField>
+
+<ParamField path="--chunk-size" type="number" default="10000">
+  Token budget per batch for chunked strategies. Only applies to strategies that support chunking.
+</ParamField>
+
+## Output options
+
+<ParamField path="--output" type="string" default="-">
+  Output path for extracted JSON. Use `-` for stdout (default).
+</ParamField>
+
+## Examples
+
+### Extract from a text file
+
+```bash
+struktur --input document.txt \
+  --schema schema.json \
+  --model openai/gpt-4o \
+  --output results.json
+```
+
+### Extract from stdin with inline schema
+
+```bash
+cat document.txt | struktur \
+  --schema-json '{"type":"object","properties":{"title":{"type":"string"}}}' \
+  --model anthropic/claude-4-sonnet
+```
+
+Output:
+```json
+{
+  "title": "Example Document Title"
+}
+```
+
+### Use a chunking strategy for large documents
+
+```bash
+struktur --input large-document.pdf \
+  --schema schema.json \
+  --model openai/gpt-4o \
+  --strategy parallelAutoMerge \
+  --chunk-size 15000
+```
+
+### Extract from raw text
+
+```bash
+struktur --text "The product costs $99 and ships in 3 days" \
+  --schema-json '{"type":"object","properties":{"price":{"type":"number"},"shipping_days":{"type":"integer"}}}'
+```
+
+Output:
+```json
+{
+  "price": 99,
+  "shipping_days": 3
+}
+```
+
+### Fetch schema from URL
+
+```bash
+struktur --input invoice.pdf \
+  --schema https://example.com/schemas/invoice.json \
+  --model google/gemini-2.0-flash-exp
+```
+
+## Progress output
+
+When stderr is a TTY, extraction progress is displayed:
+
+```
+◈ ▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱ 50% | processing 5/10
+```
+
+Progress bars are automatically hidden when piping or redirecting output.
+
+## Error handling
+
+### Schema validation errors
+
+If the extracted data fails schema validation, the error details are displayed:
+
+```bash
+struktur --input data.txt --schema schema.json
+```
+
+Output:
+```
+Schema validation failed:
+[
+  {
+    "instancePath": "/price",
+    "schemaPath": "#/properties/price/type",
+    "keyword": "type",
+    "message": "must be number"
+  }
+]
+```
+
+## Environment variables
+
+Provider API keys can be set via environment variables:
+
+- `OPENAI_API_KEY` - OpenAI API key
+- `ANTHROPIC_API_KEY` - Anthropic API key
+- `GOOGLE_GENERATIVE_AI_API_KEY` - Google Generative AI API key
+- `OPENCODE_API_KEY` - OpenCode API key
+- `OPENROUTER_API_KEY` - OpenRouter API key
+- `STRUKTUR_CONFIG_DIR` - Override config directory (default: `~/.config/struktur`)
+- `AI_SDK_LOG_WARNINGS` - Enable AI SDK warnings (default: `false`)
+
+Tokens stored via `struktur auth set` take precedence over environment variables.

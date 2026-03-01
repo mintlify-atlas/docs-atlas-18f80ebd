@@ -1,0 +1,230 @@
+---
+title: Artifacts
+description: Learn how Struktur uses artifacts as normalized JSON DTOs for structured data extraction
+---
+
+Artifacts are the fundamental input to Struktur's extraction engine. They are JSON DTOs (Data Transfer Objects) that represent pre-parsed content with normalized text and media slices. Struktur does not parse PDFs, HTML, or other formats directly—it expects you to provide normalized artifacts.
+
+## What is an artifact?
+
+An artifact is a TypeScript object that implements the `Artifact` interface:
+
+```typescript
+export interface Artifact {
+  id: string;
+  type: ArtifactType;
+  raw: () => Promise<Buffer>;
+  contents: ArtifactContent[];
+  metadata?: Record<string, unknown>;
+  tokens?: number;
+}
+```
+
+Each artifact contains:
+
+- **id**: Unique identifier for tracking and debugging
+- **type**: One of `"text"`, `"image"`, `"pdf"`, or `"file"`
+- **raw**: Function that returns the original buffer (for caching/debugging)
+- **contents**: Array of content slices with text and/or media
+- **metadata**: Optional key-value metadata
+- **tokens**: Optional pre-computed token count
+
+## Artifact contents
+
+The `contents` array contains `ArtifactContent` objects that represent slices of the artifact:
+
+```typescript
+export type ArtifactContent = {
+  page?: number;
+  text?: string;
+  media?: ArtifactImage[];
+};
+```
+
+Each content slice can have:
+
+- **page**: Optional page number (useful for PDFs)
+- **text**: Text content for this slice
+- **media**: Array of embedded images with position/size data
+
+Images are represented as:
+
+```typescript
+export type ArtifactImage = {
+  type: "image";
+  url?: string;
+  base64?: string;
+  contents?: Buffer;
+  text?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+};
+```
+
+## Creating artifacts
+
+Struktur provides several helper functions to create artifacts from different sources.
+
+### From JSON URLs
+
+Load pre-serialized artifacts from a URL:
+
+```typescript
+import { urlToArtifact } from "@mateffy/struktur";
+
+const artifact = await urlToArtifact("https://example.com/artifact.json");
+```
+
+The JSON must conform to the serialized artifact schema (without the `raw` function and with images as URLs or base64).
+
+### From files
+
+Convert files to artifacts using MIME type detection:
+
+```typescript
+import { fileToArtifact } from "@mateffy/struktur";
+
+const buffer = await Bun.file("document.txt").arrayBuffer();
+const artifact = await fileToArtifact(Buffer.from(buffer), {
+  mimeType: "text/plain"
+});
+```
+
+For plain text files, Struktur automatically splits text into content blocks by paragraph breaks:
+
+```typescript
+const splitTextIntoContents = (text: string): ArtifactContent[] => {
+  const blocks = text
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+
+  return blocks.map((block) => ({ text: block }));
+};
+```
+
+### Using providers
+
+For custom file types (like PDFs), register an artifact provider:
+
+```typescript
+import { fileToArtifact, type ArtifactProvider } from "@mateffy/struktur";
+
+const pdfProvider: ArtifactProvider = async (buffer) => ({
+  id: "pdf-1",
+  type: "pdf",
+  raw: async () => buffer,
+  contents: [
+    { page: 1, text: "Page 1 text..." },
+    { page: 2, text: "Page 2 text..." }
+  ]
+});
+
+const providers = {
+  "application/pdf": pdfProvider
+};
+
+const artifact = await fileToArtifact(buffer, {
+  mimeType: "application/pdf",
+  providers
+});
+```
+
+Providers are passed as plain objects for multi-tenant flexibility.
+
+### From text
+
+Create a simple text artifact:
+
+```typescript
+import { parseInputToArtifacts } from "@mateffy/struktur";
+
+const artifacts = await parseInputToArtifacts({
+  kind: "text",
+  text: "Your content here",
+  id: "custom-id" // optional
+});
+```
+
+## Common use cases
+
+<AccordionGroup>
+  <Accordion title="Single-page document">
+    For simple text documents, create a single artifact with one content entry:
+
+    ```typescript
+    const artifact: Artifact = {
+      id: "doc-1",
+      type: "text",
+      raw: async () => Buffer.from(text),
+      contents: [{ text }]
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Multi-page PDF">
+    For PDFs, create one content entry per page:
+
+    ```typescript
+    const artifact: Artifact = {
+      id: "pdf-1",
+      type: "pdf",
+      raw: async () => pdfBuffer,
+      contents: pages.map((text, i) => ({
+        page: i + 1,
+        text
+      }))
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Document with images">
+    Embed images in content slices where they appear:
+
+    ```typescript
+    const artifact: Artifact = {
+      id: "doc-1",
+      type: "file",
+      raw: async () => buffer,
+      contents: [
+        { text: "Introduction..." },
+        {
+          text: "Figure 1 shows...",
+          media: [{
+            type: "image",
+            url: "https://example.com/fig1.png"
+          }]
+        }
+      ]
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Validation
+
+Struktur validates serialized artifacts against a JSON schema before hydration:
+
+```typescript
+import { validateSerializedArtifacts } from "@mateffy/struktur";
+
+try {
+  const artifacts = validateSerializedArtifacts(jsonData);
+  // artifacts is now typed as SerializedArtifact[]
+} catch (error) {
+  // SchemaValidationError with detailed errors
+}
+```
+
+## Design philosophy
+
+Artifacts are designed to be:
+
+- **Format-agnostic**: The same structure works for text, PDFs, images, and custom formats
+- **Serializable**: Can be saved to JSON and loaded via `urlToArtifact`
+- **Normalized**: All content is pre-parsed into consistent text/media slices
+- **Extensible**: Use providers to add support for any format
+
+This separation of concerns means Struktur focuses on extraction logic, not parsing—you bring normalized data, Struktur extracts structured results.

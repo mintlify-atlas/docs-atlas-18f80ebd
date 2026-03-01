@@ -1,0 +1,104 @@
+---
+title: Installation
+description: Install Struktur with npm, yarn, pnpm, or bun.
+---
+
+# Installation
+
+Struktur is available as an npm package and can be installed with your preferred package manager.
+
+## Package manager
+
+<CodeGroup>
+
+```bash npm
+npm install @mateffy/struktur
+```
+
+```bash yarn
+yarn add @mateffy/struktur
+```
+
+```bash pnpm
+pnpm add @mateffy/struktur
+```
+
+```bash bun
+bun add @mateffy/struktur
+```
+
+</CodeGroup>
+
+## Prerequisites
+
+Struktur requires the following peer dependencies:
+
+- **TypeScript** ^5.0.0 or higher
+- **Node.js** or **Bun** runtime
+
+<Note>
+Struktur is built with Bun and works seamlessly in Bun environments. It also supports Node.js runtimes.
+</Note>
+
+## AI SDK providers
+
+Struktur uses the Vercel AI SDK for LLM integrations. You'll need to install at least one provider based on which models you plan to use:
+
+<CodeGroup>
+
+```bash Anthropic
+npm install @ai-sdk/anthropic
+```
+
+```bash Google
+npm install @ai-sdk/google
+```
+
+```bash OpenAI
+npm install @ai-sdk/openai
+```
+
+```bash OpenRouter
+npm install @openrouter/ai-sdk-provider
+```
+
+</CodeGroup>
+
+<Tip>
+You can install multiple providers if you want to use different models for extraction, merging, and deduplication.
+</Tip>
+
+## Verify installation
+
+Create a simple test file to verify Struktur is installed correctly:
+
+```typescript test.ts
+import { extract, simple } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+console.log("Struktur is installed!");
+```
+
+<CodeGroup>
+
+```bash bun
+bun run test.ts
+```
+
+```bash node
+npx tsx test.ts
+```
+
+</CodeGroup>
+
+If the script runs without errors, you're ready to start extracting structured data.
+
+## Next steps
+
+<Card
+  title="Quick start"
+  icon="rocket"
+  href="/quickstart"
+>
+  Build your first extraction workflow with Struktur
+</Card>

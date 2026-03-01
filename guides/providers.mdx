@@ -1,0 +1,357 @@
+---
+title: Configuring AI providers
+description: Set up and manage API tokens for OpenAI, Anthropic, Google, and OpenRouter
+---
+
+Strukt supports multiple AI providers through the Vercel AI SDK. This guide covers provider configuration, token management, and model selection.
+
+## Supported providers
+
+Strukt integrates with five AI providers:
+
+- **OpenAI**: GPT-4o, GPT-4o-mini, and other OpenAI models
+- **Anthropic**: Claude Opus, Sonnet, and Haiku models
+- **Google**: Gemini Pro and Flash models
+- **OpenRouter**: Access to multiple providers through a single API
+- **OpenCode Zen**: Specialized models optimized for code and structured data
+
+## Token storage
+
+Strukt stores API tokens securely using platform-appropriate storage:
+
+- **macOS**: Keychain (default)
+- **Other platforms**: Encrypted file at `~/.config/struktur/tokens.json`
+
+You can also use environment variables for token management.
+
+## Managing tokens with the CLI
+
+### Setting a token
+
+<Steps>
+
+<Step title="Set token from command line">
+
+```bash
+struktur auth set --provider openai --token sk-...
+```
+
+</Step>
+
+<Step title="Or read from stdin">
+
+```bash
+echo "sk-..." | struktur auth set --provider openai --token-stdin
+```
+
+</Step>
+
+<Step title="Set as default provider (optional)">
+
+```bash
+struktur auth set --provider openai --token sk-... --default
+```
+
+This automatically selects the cheapest model from that provider as your default.
+
+</Step>
+
+</Steps>
+
+### Choosing storage method
+
+```bash
+# Use keychain (macOS only)
+struktur auth set --provider openai --token sk-... --storage keychain
+
+# Use file storage
+struktur auth set --provider openai --token sk-... --storage file
+
+# Auto-detect (default: keychain on macOS, file elsewhere)
+struktur auth set --provider openai --token sk-... --storage auto
+```
+
+### Listing configured providers
+
+```bash
+struktur auth list
+```
+
+```json
+{
+  "providers": [
+    { "provider": "openai", "storage": "keychain" },
+    { "provider": "anthropic", "storage": "file" }
+  ]
+}
+```
+
+### Getting a token
+
+```bash
+# Masked output (default)
+struktur auth get --provider openai
+# Output: sk-ab...xy12
+
+# Raw token
+struktur auth get --provider openai --raw
+```
+
+### Deleting a token
+
+```bash
+struktur auth delete --provider openai
+```
+
+## Using environment variables
+
+Strukt automatically reads tokens from standard environment variables:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_GENERATIVE_AI_API_KEY="..."
+export OPENROUTER_API_KEY="sk-or-..."
+export OPENCODE_API_KEY="..."
+```
+
+Environment variables take precedence over stored tokens.
+
+## Provider configuration in code
+
+### OpenAI
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+import { openai } from "@ai-sdk/openai";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: openai("gpt-4o-mini")
+  })
+});
+```
+
+**Popular models:**
+- `gpt-4o`: Latest GPT-4 optimized model
+- `gpt-4o-mini`: Fast and cost-effective
+- `gpt-4-turbo`: Previous generation flagship
+
+### Anthropic
+
+```typescript
+import { anthropic } from "@ai-sdk/anthropic";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: anthropic("claude-3-5-sonnet-20241022")
+  })
+});
+```
+
+**Popular models:**
+- `claude-3-5-sonnet-20241022`: Best balance of speed and intelligence
+- `claude-3-5-haiku-20241022`: Fast and cost-effective
+- `claude-3-opus-20240229`: Most capable model
+
+### Google
+
+```typescript
+import { google } from "@ai-sdk/google";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: google("gemini-1.5-flash")
+  })
+});
+```
+
+**Popular models:**
+- `gemini-1.5-flash`: Fast and efficient
+- `gemini-1.5-flash-8b`: Most cost-effective
+- `gemini-1.5-pro`: Most capable Gemini model
+- `gemini-2.0-flash`: Latest generation
+
+### OpenRouter
+
+OpenRouter provides access to multiple providers through a unified API:
+
+```typescript
+import { openrouter } from "@openrouter/ai-sdk-provider";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: openrouter("anthropic/claude-3.5-sonnet")
+  })
+});
+```
+
+**Model format:** `provider/model-name`
+
+Examples:
+- `openai/gpt-4o-mini`
+- `anthropic/claude-3.5-haiku`
+- `google/gemini-flash-1.5`
+
+### OpenCode Zen
+
+OpenCode Zen provides specialized models with automatic provider routing:
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+
+// The CLI handles OpenCode model resolution
+// For programmatic use, models are resolved based on family:
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    // Use through CLI model resolution
+    model: await resolveModel("opencode/gpt-5-nano")
+  })
+});
+```
+
+**Model families:**
+- GPT models: `gpt-5.2`, `gpt-5.1`, `gpt-5-nano` (uses OpenAI SDK)
+- Claude models: `claude-opus-4-6`, `claude-sonnet-4-5`, `claude-haiku-4-5` (uses Anthropic SDK)
+- Gemini models: `gemini-3.1-pro`, `gemini-3-flash` (uses Google SDK)
+- Other models: `minimax-m2.5`, `glm-5`, `kimi-k2.5`, `qwen3-coder` (uses OpenAI-compatible SDK)
+
+## Listing available models
+
+### List all providers
+
+```bash
+struktur models --all
+```
+
+### List specific provider
+
+```bash
+struktur models --provider openai
+```
+
+Example output:
+
+```json
+{
+  "providers": [
+    {
+      "provider": "openai",
+      "ok": true,
+      "models": [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-3.5-turbo"
+      ]
+    }
+  ]
+}
+```
+
+## Setting a default model
+
+### Using cheapest model for a provider
+
+```bash
+struktur auth default openai
+```
+
+This queries available models and selects the cheapest option based on known pricing.
+
+### Using a specific model
+
+```bash
+struktur auth default --model openai/gpt-4o-mini
+```
+
+## Model selection in the CLI
+
+When running extractions via CLI, Struktur resolves models in this order:
+
+1. **Explicit `--model` flag**
+   ```bash
+   struktur extract-file --model anthropic/claude-3-5-haiku-20241022 ...
+   ```
+
+2. **Configured default model**
+   ```bash
+   struktur auth default --model openai/gpt-4o-mini
+   ```
+
+3. **Cheapest model from first configured provider**
+   - Automatically selects based on stored tokens
+
+## Cost optimization
+
+Strukt provides a "cheapest model" heuristic for each provider:
+
+<CodeGroup>
+
+```bash CLI
+# Set cheapest model as default
+struktur auth default openai
+```
+
+```typescript Code
+import { resolveCheapestModel } from "@mateffy/struktur";
+
+const cheapest = await resolveCheapestModel("openai");
+console.log(cheapest); // "gpt-4o-mini"
+```
+
+</CodeGroup>
+
+**Cheapest model preferences by provider:**
+
+- **OpenAI**: `gpt-4.1-nano`, `gpt-4.1-mini`, `gpt-4o-mini`
+- **Anthropic**: `claude-3-5-haiku`, `claude-3-haiku`
+- **Google**: `gemini-1.5-flash-8b`, `gemini-1.5-flash`
+- **OpenCode**: `gpt-5-nano`, `claude-haiku-3.5`, `gemini-3-flash`
+- **OpenRouter**: `openai/gpt-4o-mini`, `anthropic/claude-3.5-haiku`
+
+## Troubleshooting
+
+### No token found
+
+```
+Error: No token stored for provider: openai
+```
+
+**Solution:** Set a token using `struktur auth set --provider openai --token <token>`
+
+### Model resolution fails
+
+```
+Error: Model is required (--model provider/model) and no providers are configured.
+```
+
+**Solution:** Either:
+- Pass `--model` explicitly
+- Configure a provider token
+- Set a default model
+
+### Keychain access denied (macOS)
+
+**Solution:** Use file storage instead:
+
+```bash
+struktur auth set --provider openai --token sk-... --storage file
+```
+
+Or disable keychain globally:
+
+```bash
+export STRUKTUR_DISABLE_KEYCHAIN=1
+```

@@ -1,0 +1,182 @@
+---
+title: Simple extraction
+description: Extract structured data from a single artifact using the simple strategy
+---
+
+The simple strategy is the most straightforward way to extract data from artifacts. It sends all content in a single request to the LLM and returns the validated result.
+
+## Basic example
+
+This example extracts a title from a single-page document:
+
+```ts
+import { extract, simple, type Artifact } from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+import { google } from "@ai-sdk/google";
+
+type Output = {
+  title: string;
+};
+
+const schema: JSONSchemaType<Output> = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+  },
+  required: ["title"],
+  additionalProperties: false,
+};
+
+const artifacts: Artifact[] = [
+  {
+    id: "doc-1",
+    type: "pdf",
+    raw: async () => Buffer.from(""),
+    contents: [{ page: 1, text: "Title: Example Document" }],
+  },
+];
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: google("gemini-2.0-flash-exp"),
+  }),
+});
+
+console.log(result.data.title); // "Example Document"
+```
+
+## When to use simple strategy
+
+The simple strategy is best for:
+
+- **Small documents** that fit within the model's context window
+- **Single-page content** like web pages or short PDFs
+- **Quick prototypes** where you want minimal configuration
+- **Low latency** requirements (single request)
+
+<Note>
+The simple strategy doesn't perform any chunking. If your content exceeds the model's context limit, use `parallel` or `sequential` instead.
+</Note>
+
+## Extracting structured data
+
+Extract multiple fields with nested objects:
+
+```ts
+import { extract, simple } from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+import { anthropic } from "@ai-sdk/anthropic";
+
+type Product = {
+  name: string;
+  price: number;
+  specs: {
+    weight?: number;
+    dimensions?: string;
+  };
+};
+
+const schema: JSONSchemaType<Product> = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    price: { type: "number" },
+    specs: {
+      type: "object",
+      properties: {
+        weight: { type: "number", nullable: true },
+        dimensions: { type: "string", nullable: true },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  required: ["name", "price", "specs"],
+  additionalProperties: false,
+};
+
+const artifacts = [{
+  id: "product",
+  type: "text",
+  raw: async () => Buffer.from(""),
+  contents: [{
+    text: "Laptop Pro 15. Price: $1299. Weight: 4.2 lbs. Size: 14 x 9.8 x 0.6 inches"
+  }],
+}];
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: anthropic("claude-3-5-sonnet-20241022"),
+  }),
+});
+
+console.log(result.data);
+// {
+//   name: "Laptop Pro 15",
+//   price: 1299,
+//   specs: { weight: 4.2, dimensions: "14 x 9.8 x 0.6 inches" }
+// }
+```
+
+## Custom output instructions
+
+Add additional instructions to guide extraction:
+
+```ts
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: google("gemini-2.0-flash-exp"),
+    outputInstructions: "Extract prices in USD. Round to 2 decimal places.",
+  }),
+});
+```
+
+## Handling validation errors
+
+The simple strategy validates results with Ajv and retries on failure:
+
+```ts
+import { extract, simple } from "@mateffy/struktur";
+
+try {
+  const result = await extract({
+    artifacts,
+    schema,
+    strategy: simple({ model }),
+    events: {
+      onMessage: ({ role, content }) => {
+        console.log(`[${role}]`, content);
+      },
+    },
+  });
+  
+  console.log("Extracted:", result.data);
+} catch (error) {
+  if (error.name === "SchemaValidationError") {
+    console.error("Validation failed:", error.errors);
+  } else {
+    console.error("Extraction failed:", error);
+  }
+}
+```
+
+<Tip>
+Use the `onMessage` event to see validation retry attempts and understand why extraction might be failing.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Parallel strategy" icon="layer-group" href="/api/strategies/parallel">
+    Process large documents with concurrent chunking
+  </Card>
+  <Card title="Sequential strategy" icon="list" href="/api/strategies/sequential">
+    Build context incrementally for long documents
+  </Card>
+</CardGroup>

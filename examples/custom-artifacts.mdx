@@ -1,0 +1,305 @@
+---
+title: Custom artifacts
+description: Create custom artifact providers for specialized document formats
+---
+
+Struktur uses artifact providers to convert files and buffers into normalized `Artifact` objects. You can create custom providers for any document format.
+
+## Artifact provider interface
+
+An artifact provider is a function that takes a buffer and returns an `Artifact`:
+
+```ts
+import type { ArtifactProvider, Artifact } from "@mateffy/struktur";
+
+const myProvider: ArtifactProvider = async (buffer: Buffer): Promise<Artifact> => {
+  // Parse the buffer and return an Artifact
+  return {
+    id: "unique-id",
+    type: "text", // or "pdf", "image", "file"
+    raw: async () => buffer,
+    contents: [
+      {
+        page: 1,
+        text: "Extracted text content",
+        media: [], // Optional images
+      },
+    ],
+  };
+};
+```
+
+## CSV provider example
+
+Create a provider that converts CSV files to artifacts:
+
+```ts
+import { fileToArtifact } from "@mateffy/struktur";
+import type { ArtifactProvider } from "@mateffy/struktur";
+
+const csvProvider: ArtifactProvider = async (buffer: Buffer) => {
+  const text = buffer.toString("utf-8");
+  const lines = text.split("\n");
+  const header = lines[0];
+  const rows = lines.slice(1).filter(line => line.trim());
+
+  const formatted = [
+    `CSV Data (${rows.length} rows)`,
+    `Columns: ${header}`,
+    "",
+    ...rows.map((row, i) => `Row ${i + 1}: ${row}`),
+  ].join("\n");
+
+  return {
+    id: "csv-data",
+    type: "file",
+    raw: async () => buffer,
+    contents: [{ text: formatted }],
+  };
+};
+
+// Use the provider
+const buffer = Buffer.from("name,age,city\nAlice,30,NYC\nBob,25,LA");
+const artifact = await fileToArtifact(buffer, {
+  mimeType: "text/csv",
+  providers: {
+    "text/csv": csvProvider,
+  },
+});
+```
+
+## Markdown with frontmatter
+
+Parse markdown files with YAML frontmatter:
+
+```ts
+import type { ArtifactProvider } from "@mateffy/struktur";
+
+const markdownProvider: ArtifactProvider = async (buffer: Buffer) => {
+  const text = buffer.toString("utf-8");
+  
+  // Extract frontmatter
+  const frontmatterMatch = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  
+  if (!frontmatterMatch) {
+    return {
+      id: "markdown",
+      type: "text",
+      raw: async () => buffer,
+      contents: [{ text }],
+    };
+  }
+
+  const [, frontmatter, content] = frontmatterMatch;
+  
+  // Parse YAML frontmatter (simplified)
+  const metadata: Record<string, string> = {};
+  frontmatter.split("\n").forEach(line => {
+    const [key, ...valueParts] = line.split(":");
+    if (key && valueParts.length) {
+      metadata[key.trim()] = valueParts.join(":").trim();
+    }
+  });
+
+  return {
+    id: metadata.id || "markdown",
+    type: "text",
+    raw: async () => buffer,
+    contents: [{ text: content.trim() }],
+    metadata,
+  };
+};
+
+// Use the provider
+const mdBuffer = Buffer.from(`---
+title: My Document
+author: Alice
+---
+
+# Heading
+
+Content here.`);
+
+const artifact = await fileToArtifact(mdBuffer, {
+  mimeType: "text/markdown",
+  providers: {
+    "text/markdown": markdownProvider,
+  },
+});
+
+console.log(artifact.metadata);
+// { title: "My Document", author: "Alice" }
+```
+
+## Image provider with OCR
+
+Create a provider that extracts text from images:
+
+```ts
+import type { ArtifactProvider } from "@mateffy/struktur";
+
+const ocrImageProvider: ArtifactProvider = async (buffer: Buffer) => {
+  // In a real implementation, use an OCR library like Tesseract
+  const base64 = buffer.toString("base64");
+  
+  // Simulated OCR result
+  const ocrText = "Text extracted from image via OCR";
+
+  return {
+    id: "image-with-text",
+    type: "image",
+    raw: async () => buffer,
+    contents: [
+      {
+        text: ocrText,
+        media: [
+          {
+            type: "image",
+            base64,
+          },
+        ],
+      },
+    ],
+  };
+};
+
+// Use the provider
+const imageBuffer = await Bun.file("document.png").arrayBuffer();
+const artifact = await fileToArtifact(Buffer.from(imageBuffer), {
+  mimeType: "image/png",
+  providers: {
+    "image/png": ocrImageProvider,
+  },
+});
+```
+
+## PDF provider with page splitting
+
+Split PDF pages into separate content entries:
+
+```ts
+import type { ArtifactProvider, ArtifactContent } from "@mateffy/struktur";
+
+const pdfProvider: ArtifactProvider = async (buffer: Buffer) => {
+  // In a real implementation, use a PDF library like pdf-parse or pdfjs
+  // This is a simplified example
+  
+  const pages: ArtifactContent[] = [
+    { page: 1, text: "Content from page 1" },
+    { page: 2, text: "Content from page 2" },
+    { page: 3, text: "Content from page 3" },
+  ];
+
+  return {
+    id: "multi-page-pdf",
+    type: "pdf",
+    raw: async () => buffer,
+    contents: pages,
+  };
+};
+
+// Use the provider
+const pdfBuffer = await Bun.file("document.pdf").arrayBuffer();
+const artifact = await fileToArtifact(Buffer.from(pdfBuffer), {
+  mimeType: "application/pdf",
+  providers: {
+    "application/pdf": pdfProvider,
+  },
+});
+
+console.log(`PDF has ${artifact.contents.length} pages`);
+```
+
+## Global provider registration
+
+Register providers globally to use across your application:
+
+```ts
+import { fileToArtifact, defaultArtifactProviders } from "@mateffy/struktur";
+
+// Add providers to the default registry
+defaultArtifactProviders["text/csv"] = csvProvider;
+defaultArtifactProviders["text/markdown"] = markdownProvider;
+defaultArtifactProviders["application/pdf"] = pdfProvider;
+
+// Now use without passing providers each time
+const artifact = await fileToArtifact(buffer, {
+  mimeType: "text/csv",
+  // Uses defaultArtifactProviders automatically
+});
+```
+
+<Warning>
+Modifying `defaultArtifactProviders` affects all subsequent calls to `fileToArtifact`. For isolated environments, pass providers directly to each call.
+</Warning>
+
+## Multi-tenant isolation
+
+Keep providers isolated per tenant or request:
+
+```ts
+import type { ArtifactProviders } from "@mateffy/struktur";
+
+class TenantArtifactRegistry {
+  private providers: Map<string, ArtifactProviders> = new Map();
+
+  register(tenantId: string, mimeType: string, provider: ArtifactProvider) {
+    if (!this.providers.has(tenantId)) {
+      this.providers.set(tenantId, {});
+    }
+    this.providers.get(tenantId)![mimeType] = provider;
+  }
+
+  getProviders(tenantId: string): ArtifactProviders {
+    return this.providers.get(tenantId) || {};
+  }
+}
+
+const registry = new TenantArtifactRegistry();
+
+// Register per tenant
+registry.register("tenant-a", "text/csv", csvProviderA);
+registry.register("tenant-b", "text/csv", csvProviderB);
+
+// Use per tenant
+const artifactA = await fileToArtifact(buffer, {
+  mimeType: "text/csv",
+  providers: registry.getProviders("tenant-a"),
+});
+```
+
+## Testing custom providers
+
+Test providers with sample buffers:
+
+```ts
+import { expect, test } from "bun:test";
+
+test("CSV provider parses rows correctly", async () => {
+  const buffer = Buffer.from("name,age\nAlice,30\nBob,25");
+  const artifact = await csvProvider(buffer);
+
+  expect(artifact.type).toBe("file");
+  expect(artifact.contents[0].text).toContain("2 rows");
+  expect(artifact.contents[0].text).toContain("Alice,30");
+});
+
+test("Markdown provider extracts frontmatter", async () => {
+  const buffer = Buffer.from("---\ntitle: Test\n---\nContent");
+  const artifact = await markdownProvider(buffer);
+
+  expect(artifact.metadata?.title).toBe("Test");
+  expect(artifact.contents[0].text).toBe("Content");
+});
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Artifact types" icon="file" href="/concepts/artifacts">
+    Learn about artifact structure and types
+  </Card>
+  <Card title="Provider API" icon="plug" href="/api/artifacts/providers">
+    Complete provider API reference
+  </Card>
+</CardGroup>

@@ -1,0 +1,453 @@
+---
+title: JSON schema validation
+description: Learn how Struktur uses Ajv for schema-first validation with automatic retries and type inference
+---
+
+Struktur uses JSON Schema and [Ajv](https://ajv.js.org/) to validate LLM outputs, ensuring extracted data matches your expected structure. All extraction strategies validate results before returning them, and automatically retry on validation failures.
+
+## Schema-first design
+
+Every extraction starts with a JSON schema that defines the output structure:
+
+```typescript
+import { extract, simple } from "@mateffy/struktur";
+import type { JSONSchemaType } from "ajv";
+import { google } from "@ai-sdk/google";
+
+type Output = {
+  title: string;
+  authors: string[];
+  publishedDate?: string;
+};
+
+const schema: JSONSchemaType<Output> = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    authors: { type: "array", items: { type: "string" } },
+    publishedDate: { type: "string", nullable: true }
+  },
+  required: ["title", "authors"],
+  additionalProperties: false
+};
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({ model: google("gemini-2.0-flash-exp") })
+});
+
+// result.data is typed as Output
+console.log(result.data.title);
+```
+
+Using `JSONSchemaType<T>` from Ajv provides:
+
+- **Type safety**: The schema is validated at compile time against your TypeScript type
+- **Type inference**: `result.data` is automatically typed as `T`
+- **Runtime validation**: Ajv validates LLM output matches the schema
+
+## Validation process
+
+Struktur validates LLM outputs using Ajv with the following configuration:
+
+```typescript
+import Ajv from "ajv";
+import addFormats from "ajv-formats";
+
+export const createAjv = () => {
+  const ajv = new Ajv({
+    allErrors: true,
+    strict: false,
+    allowUnionTypes: true
+  });
+  addFormats(ajv);
+  return ajv;
+};
+```
+
+This configuration:
+
+- **allErrors**: Collects all validation errors (not just the first)
+- **strict: false**: Allows flexible schema definitions
+- **allowUnionTypes**: Supports union types like `string | null`
+- **ajv-formats**: Adds support for `format` keywords (`date-time`, `email`, `uri`, etc.)
+
+## Automatic retries
+
+When validation fails, Struktur automatically retries the LLM call with error feedback:
+
+<Steps>
+  <Step title="Initial LLM call">
+    Send the extraction prompt to the LLM.
+  </Step>
+  
+  <Step title="Validate response">
+    Compile schema and validate the LLM's JSON output.
+  </Step>
+  
+  <Step title="Retry on failure">
+    If validation fails, send errors back to the LLM and retry (up to 3 times by default).
+  </Step>
+  
+  <Step title="Return or throw">
+    Return validated data or throw `SchemaValidationError` if all retries fail.
+  </Step>
+</Steps>
+
+The retry logic is handled by `runWithRetries` in the LLM module:
+
+```typescript
+// Simplified retry flow
+for (let attempt = 0; attempt < maxRetries; attempt++) {
+  const response = await model.generate(messages);
+  const validation = validate(schema, response.data);
+  
+  if (validation.valid) {
+    return { data: validation.data, usage };
+  }
+  
+  // Add validation errors to messages and retry
+  messages.push({
+    role: "assistant",
+    content: response.data
+  }, {
+    role: "user",
+    content: formatValidationErrors(validation.errors)
+  });
+}
+```
+
+## Validation modes
+
+Struktur supports two validation modes:
+
+### Strict mode
+
+Enforces all schema constraints including `required` fields:
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model,
+    strict: true // default behavior
+  })
+});
+```
+
+### Lenient mode
+
+Allows missing `required` fields (useful for partial extraction):
+
+```typescript
+import { validateAllowingMissingRequired } from "@mateffy/struktur";
+
+const validation = validateAllowingMissingRequired(
+  ajv,
+  schema,
+  data
+);
+
+if (!validation.valid) {
+  // Only non-required errors (type mismatches, format errors, etc.)
+  console.error(validation.errors);
+}
+```
+
+From the implementation:
+
+```typescript
+export const validateAllowingMissingRequired = <T>(
+  ajv: Ajv,
+  schema: SchemaInput<T>,
+  data: unknown
+): ValidationResult<T> => {
+  const validate = ajv.compile<T>(schema);
+  const valid = validate(data);
+
+  if (valid) {
+    return { valid: true, data: data as T };
+  }
+
+  const errors = validate.errors ?? [];
+  const nonRequiredErrors = errors.filter((error) => !isRequiredError(error));
+
+  if (nonRequiredErrors.length === 0) {
+    return { valid: true, data: data as T };
+  }
+
+  return { valid: false, errors: nonRequiredErrors };
+};
+```
+
+## Error handling
+
+Validation failures throw `SchemaValidationError` with detailed error information:
+
+```typescript
+import { extract, SchemaValidationError } from "@mateffy/struktur";
+
+try {
+  const result = await extract({
+    artifacts,
+    schema,
+    strategy: simple({ model })
+  });
+} catch (error) {
+  if (error instanceof SchemaValidationError) {
+    console.error("Validation failed:", error.message);
+    console.error("Errors:", error.errors);
+  }
+}
+```
+
+Each error in the `errors` array is an Ajv `ErrorObject`:
+
+```typescript
+type ErrorObject = {
+  keyword: string;        // e.g., "required", "type", "format"
+  instancePath: string;   // e.g., "/authors/0"
+  schemaPath: string;     // e.g., "#/properties/authors/items/type"
+  params: object;         // Error-specific parameters
+  message?: string;       // Human-readable message
+};
+```
+
+## Common schema patterns
+
+### Arrays with item validation
+
+```typescript
+type Book = {
+  title: string;
+  isbn?: string;
+};
+
+type Library = {
+  books: Book[];
+};
+
+const schema: JSONSchemaType<Library> = {
+  type: "object",
+  properties: {
+    books: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          isbn: { type: "string", nullable: true }
+        },
+        required: ["title"],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ["books"],
+  additionalProperties: false
+};
+```
+
+### Nested objects
+
+```typescript
+type Person = {
+  name: string;
+  address: {
+    street: string;
+    city: string;
+    zip?: string;
+  };
+};
+
+const schema: JSONSchemaType<Person> = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    address: {
+      type: "object",
+      properties: {
+        street: { type: "string" },
+        city: { type: "string" },
+        zip: { type: "string", nullable: true }
+      },
+      required: ["street", "city"],
+      additionalProperties: false
+    }
+  },
+  required: ["name", "address"],
+  additionalProperties: false
+};
+```
+
+### Format validation
+
+```typescript
+type Event = {
+  name: string;
+  date: string;  // ISO 8601 date-time
+  url?: string;  // Valid URL
+};
+
+const schema: JSONSchemaType<Event> = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    date: { type: "string", format: "date-time" },
+    url: { type: "string", format: "uri", nullable: true }
+  },
+  required: ["name", "date"],
+  additionalProperties: false
+};
+```
+
+Supported formats (via `ajv-formats`):
+
+- `date-time`, `date`, `time`
+- `email`, `hostname`, `ipv4`, `ipv6`
+- `uri`, `uri-reference`, `uri-template`
+- `json-pointer`, `regex`
+- `uuid`
+
+### Enums and constants
+
+```typescript
+type Status = "draft" | "published" | "archived";
+
+type Article = {
+  title: string;
+  status: Status;
+};
+
+const schema: JSONSchemaType<Article> = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    status: { type: "string", enum: ["draft", "published", "archived"] }
+  },
+  required: ["title", "status"],
+  additionalProperties: false
+};
+```
+
+## Schema-aware merging
+
+Auto-merge strategies use schema information to intelligently merge results:
+
+```typescript
+for (const [key, propSchema] of Object.entries(properties)) {
+  if (isArraySchema(propSchema)) {
+    // Concatenate arrays
+    merged[key] = [...currentValue, ...newValue];
+  } else if (isObjectSchema(propSchema)) {
+    // Merge objects
+    merged[key] = { ...currentValue, ...newValue };
+  } else {
+    // Prefer new scalar values
+    merged[key] = newValue ?? currentValue;
+  }
+}
+```
+
+This ensures:
+
+- Arrays accumulate items across batches
+- Objects merge properties without duplication
+- Scalars prefer the latest non-empty value
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use JSONSchemaType for type safety">
+    Always use `JSONSchemaType<T>` from Ajv to ensure your schema matches your TypeScript type:
+
+    ```typescript
+    import type { JSONSchemaType } from "ajv";
+
+    type Output = { title: string };
+    
+    // This will error at compile time if schema doesn't match Output
+    const schema: JSONSchemaType<Output> = {
+      type: "object",
+      properties: {
+        title: { type: "string" }
+      },
+      required: ["title"],
+      additionalProperties: false
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Set additionalProperties to false">
+    Prevent LLMs from adding unexpected fields:
+
+    ```typescript
+    const schema = {
+      type: "object",
+      properties: { /* ... */ },
+      additionalProperties: false  // Reject extra fields
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Use formats for validation">
+    Leverage `ajv-formats` for common data types:
+
+    ```typescript
+    const schema = {
+      type: "object",
+      properties: {
+        email: { type: "string", format: "email" },
+        publishedAt: { type: "string", format: "date-time" },
+        website: { type: "string", format: "uri" }
+      },
+      required: ["email"],
+      additionalProperties: false
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Make fields nullable when optional">
+    For optional fields that can be `null`, use `nullable: true`:
+
+    ```typescript
+    type Person = {
+      name: string;
+      nickname?: string | null;
+    };
+
+    const schema: JSONSchemaType<Person> = {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        nickname: { type: "string", nullable: true }
+      },
+      required: ["name"],
+      additionalProperties: false
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Validation events
+
+Monitor validation retries using the `onMessage` event:
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({ model }),
+  events: {
+    onMessage: ({ role, content }) => {
+      if (role === "user" && typeof content === "string" && content.includes("validation")) {
+        console.log("Validation retry:", content);
+      }
+    }
+  }
+});
+```
+
+This logs when the LLM is given validation error feedback for retries.

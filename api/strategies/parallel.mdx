@@ -1,0 +1,109 @@
+---
+title: parallel()
+description: Parallel extraction strategy that processes document chunks concurrently and merges results with an LLM
+---
+
+The `parallel()` strategy splits large documents into chunks, processes them concurrently, and uses an LLM to merge the extracted results.
+
+## Usage
+
+```typescript
+import { extract, parallel } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model: openai('gpt-4o-mini'),
+    mergeModel: openai('gpt-4o'),
+    chunkSize: 100000,
+  }),
+});
+```
+
+## Configuration
+
+<ParamField path="model" type="LanguageModel" required>
+  The AI SDK language model to use for extracting from each chunk.
+</ParamField>
+
+<ParamField path="mergeModel" type="LanguageModel" required>
+  The AI SDK language model to use for merging extracted results. Typically a more capable model.
+</ParamField>
+
+<ParamField path="chunkSize" type="number" required>
+  Maximum tokens per chunk. Documents are split into batches that fit within this limit.
+</ParamField>
+
+<ParamField path="concurrency" type="number">
+  Maximum number of concurrent extraction tasks. Defaults to processing all chunks in parallel.
+</ParamField>
+
+<ParamField path="maxImages" type="number">
+  Maximum number of images per chunk. Useful for controlling vision API costs.
+</ParamField>
+
+<ParamField path="outputInstructions" type="string">
+  Additional instructions to guide the model's output format or behavior.
+</ParamField>
+
+<ParamField path="execute" type="function">
+  Custom retry executor function. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="strict" type="boolean">
+  Enable strict mode for structured output validation. Defaults to `false`.
+</ParamField>
+
+## When to use
+
+- You have large documents that exceed context limits
+- You want fast processing through parallelization
+- You need an LLM to intelligently merge results
+- You're willing to use extra tokens for the merge step
+
+## Trade-offs
+
+**Advantages:**
+- Fast processing through parallelization
+- Intelligent LLM-based merging
+- Handles documents of any size
+- Configurable concurrency for rate limit management
+
+**Limitations:**
+- Higher token usage (chunk extractions + merge)
+- Merge quality depends on merge model capability
+- More expensive than simple strategy
+
+## Performance characteristics
+
+The strategy estimates `batches.length + 3` steps:
+1. Prepare
+2. Extract from batch 1 through N (parallel)
+3. Merge
+4. Complete
+
+## Example with concurrency control
+
+```typescript
+import { extract, parallel } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts: largeDocumentArtifacts,
+  schema: invoiceSchema,
+  strategy: parallel({
+    model: openai('gpt-4o-mini'),
+    mergeModel: openai('gpt-4o'),
+    chunkSize: 100000,
+    concurrency: 5, // Process 5 chunks at a time
+    maxImages: 10,  // Limit images per chunk
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Progress: ${step}/${total} - ${label}`);
+    },
+  },
+});
+```

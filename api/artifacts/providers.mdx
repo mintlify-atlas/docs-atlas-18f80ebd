@@ -1,0 +1,246 @@
+---
+title: Artifact providers
+description: Registry system for custom artifact conversion handlers
+---
+
+Artifact providers enable you to register custom handlers for converting file buffers into artifacts based on MIME type.
+
+## ArtifactProvider interface
+
+An artifact provider is a function that takes a `Buffer` and returns a `Promise<Artifact>`.
+
+```typescript
+export type ArtifactProvider = (buffer: Buffer) => Promise<Artifact>
+```
+
+### Parameters
+
+<ParamField path="buffer" type="Buffer" required>
+  The raw file contents to convert into an artifact
+</ParamField>
+
+### Returns
+
+<ResponseField name="artifact" type="Artifact">
+  A fully constructed artifact object with:
+  - `id`: Unique identifier for the artifact
+  - `type`: One of `"text"`, `"image"`, `"pdf"`, or `"file"`
+  - `raw`: Async function returning the original buffer
+  - `contents`: Array of content blocks with text and/or media
+  - `metadata`: Optional metadata object
+  - `tokens`: Optional pre-calculated token count
+</ResponseField>
+
+## ArtifactProviders registry
+
+A provider registry maps MIME types to provider functions:
+
+```typescript
+export type ArtifactProviders = Record<string, ArtifactProvider>
+```
+
+The key is the MIME type string (e.g., `"application/pdf"`, `"text/csv"`) and the value is the provider function.
+
+## defaultArtifactProviders
+
+The library exports an empty default registry:
+
+```typescript
+export const defaultArtifactProviders: ArtifactProviders = {}
+```
+
+You can populate this registry globally or create custom registries for different contexts.
+
+## Usage
+
+### Creating a custom provider
+
+```typescript
+import type { ArtifactProvider } from "struktur";
+
+const pdfProvider: ArtifactProvider = async (buffer) => {
+  // Use a PDF parsing library
+  const pages = await parsePdf(buffer);
+  
+  return {
+    id: `pdf-${crypto.randomUUID()}`,
+    type: "pdf",
+    raw: async () => buffer,
+    contents: pages.map((page, index) => ({
+      page: index + 1,
+      text: page.text,
+      media: page.images.map((img) => ({
+        type: "image",
+        contents: img.buffer,
+        x: img.x,
+        y: img.y,
+        width: img.width,
+        height: img.height,
+      })),
+    })),
+    metadata: {
+      pageCount: pages.length,
+      createdAt: new Date().toISOString(),
+    },
+  };
+};
+```
+
+### Registering providers
+
+#### Option 1: Global registration
+
+```typescript
+import { defaultArtifactProviders } from "struktur";
+
+defaultArtifactProviders["application/pdf"] = pdfProvider;
+defaultArtifactProviders["text/csv"] = csvProvider;
+
+// Now all fileToArtifact calls will use these providers
+const artifact = await fileToArtifact(pdfBuffer, {
+  mimeType: "application/pdf",
+});
+```
+
+#### Option 2: Per-call registration
+
+```typescript
+import type { ArtifactProviders } from "struktur";
+
+const customProviders: ArtifactProviders = {
+  "application/pdf": pdfProvider,
+  "text/csv": csvProvider,
+};
+
+const artifact = await fileToArtifact(pdfBuffer, {
+  mimeType: "application/pdf",
+  providers: customProviders,
+});
+```
+
+#### Option 3: Multi-tenant isolation
+
+For multi-tenant applications, create separate provider registries:
+
+```typescript
+const tenantAProviders: ArtifactProviders = {
+  "application/pdf": customPdfProvider,
+};
+
+const tenantBProviders: ArtifactProviders = {
+  "application/pdf": basicPdfProvider,
+};
+
+// Each tenant uses their own registry
+const artifactA = await fileToArtifact(buffer, {
+  mimeType: "application/pdf",
+  providers: tenantAProviders,
+});
+```
+
+## Example providers
+
+### CSV provider
+
+```typescript
+import { parse } from "csv-parse/sync";
+import type { ArtifactProvider } from "struktur";
+
+const csvProvider: ArtifactProvider = async (buffer) => {
+  const records = parse(buffer, { columns: true });
+  const text = JSON.stringify(records, null, 2);
+  
+  return {
+    id: `csv-${crypto.randomUUID()}`,
+    type: "text",
+    raw: async () => buffer,
+    contents: [{ text }],
+    metadata: {
+      rowCount: records.length,
+      format: "csv",
+    },
+  };
+};
+```
+
+### Markdown provider with metadata
+
+```typescript
+import matter from "gray-matter";
+import type { ArtifactProvider } from "struktur";
+
+const markdownProvider: ArtifactProvider = async (buffer) => {
+  const { content, data } = matter(buffer.toString());
+  
+  return {
+    id: `md-${crypto.randomUUID()}`,
+    type: "text",
+    raw: async () => buffer,
+    contents: [{ text: content }],
+    metadata: {
+      frontmatter: data,
+      format: "markdown",
+    },
+  };
+};
+```
+
+### Image with OCR
+
+```typescript
+import Tesseract from "tesseract.js";
+import type { ArtifactProvider } from "struktur";
+
+const ocrImageProvider: ArtifactProvider = async (buffer) => {
+  const { data } = await Tesseract.recognize(buffer);
+  
+  return {
+    id: `img-${crypto.randomUUID()}`,
+    type: "image",
+    raw: async () => buffer,
+    contents: [
+      {
+        media: [{ type: "image", contents: buffer }],
+        text: data.text,
+      },
+    ],
+    metadata: {
+      confidence: data.confidence,
+      language: data.language,
+    },
+  };
+};
+```
+
+## Testing providers
+
+From the test suite:
+
+```typescript
+import { test, expect } from "bun:test";
+import { fileToArtifact } from "struktur";
+import type { ArtifactProviders } from "struktur";
+
+test("fileToArtifact uses custom providers", async () => {
+  const providers: ArtifactProviders = {
+    "text/plain": async (buffer) => ({
+      id: "custom-id",
+      type: "text",
+      raw: async () => buffer,
+      contents: [{ text: buffer.toString() }],
+    }),
+  };
+
+  const artifact = await fileToArtifact(Buffer.from("hello"), {
+    mimeType: "text/plain",
+    providers,
+  });
+
+  expect(artifact.id).toBe("custom-id");
+  expect(artifact.contents[0]?.text).toBe("hello");
+});
+```
+
+## Source
+
+Implementation: `src/artifacts/providers.ts:3-5`

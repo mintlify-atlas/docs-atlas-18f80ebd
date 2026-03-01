@@ -1,0 +1,88 @@
+---
+title: simple()
+description: Single-pass extraction strategy for small documents that fit within model context limits
+---
+
+The `simple()` strategy performs extraction in a single pass without chunking. Use this for documents small enough to fit within your model's context window.
+
+## Usage
+
+```typescript
+import { extract, simple } from 'struktur';
+import { openai } from '@ai-sdk/openai';
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: simple({
+    model: openai('gpt-4o'),
+  }),
+});
+```
+
+## Configuration
+
+<ParamField path="model" type="LanguageModel" required>
+  The AI SDK language model to use for extraction.
+</ParamField>
+
+<ParamField path="outputInstructions" type="string">
+  Additional instructions to guide the model's output format or behavior.
+</ParamField>
+
+<ParamField path="execute" type="function">
+  Custom retry executor function. Defaults to `runWithRetries`.
+</ParamField>
+
+<ParamField path="strict" type="boolean">
+  Enable strict mode for structured output validation. Defaults to `false`.
+</ParamField>
+
+## When to use
+
+- Your document fits within the model's context window
+- You have a single page or small document
+- You want the fastest extraction with lowest token usage
+- You don't need parallel processing
+
+## Trade-offs
+
+**Advantages:**
+- Fastest extraction time
+- Lowest token usage
+- Simplest configuration
+- No merge complexity
+
+**Limitations:**
+- Cannot handle large documents
+- No parallel processing
+- Fails if input exceeds context window
+
+## Performance characteristics
+
+The strategy estimates 3 steps:
+1. Prepare
+2. Extract
+3. Complete
+
+## Example with options
+
+```typescript
+import { extract, simple } from 'struktur';
+import { anthropic } from '@ai-sdk/anthropic';
+
+const result = await extract({
+  artifacts: [singlePageArtifact],
+  schema: productSchema,
+  strategy: simple({
+    model: anthropic('claude-3-5-sonnet-20241022'),
+    outputInstructions: 'Focus on extracting prices in USD',
+    strict: true,
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Step ${step}/${total}: ${label}`);
+    },
+  },
+});
+```

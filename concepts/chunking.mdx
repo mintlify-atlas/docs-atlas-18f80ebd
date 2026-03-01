@@ -1,0 +1,496 @@
+---
+title: Token-aware chunking
+description: Learn how Struktur splits and batches artifacts to fit LLM context windows
+---
+
+Struktur automatically splits large artifacts and batches them to fit within token budgets and image limits. This ensures extraction works with documents of any size while respecting model constraints.
+
+## Why chunking matters
+
+LLMs have context window limits (e.g., 128K tokens for GPT-4). When artifacts exceed these limits, Struktur must:
+
+1. **Split** individual artifacts into smaller parts
+2. **Batch** multiple artifact parts together up to the token budget
+3. Process batches according to the chosen strategy
+
+Chunking is transparent—you pass artifacts, Struktur handles the rest.
+
+## Two-phase process
+
+<Steps>
+  <Step title="Artifact splitting">
+    Large artifacts are split into parts using `ArtifactSplitter`. Each part respects token and image limits.
+  </Step>
+  
+  <Step title="Batch creation">
+    Split artifacts are grouped into batches using `ArtifactBatcher`. Batches maximize token usage without exceeding limits.
+  </Step>
+</Steps>
+
+## Artifact splitting
+
+The `ArtifactSplitter` divides artifacts based on their `contents` array:
+
+```typescript
+import { splitArtifact } from "@mateffy/struktur";
+
+const splits = splitArtifact(artifact, {
+  maxTokens: 10_000,
+  maxImages: 5
+});
+```
+
+### How splitting works
+
+<Steps>
+  <Step title="Split oversized text">
+    If a content block's text exceeds `maxTokens`, split it into chunks:
+
+    ```typescript
+    const splitTextIntoChunks = (
+      content: ArtifactContent,
+      maxTokens: number,
+      options?: TokenCountOptions
+    ): ArtifactContent[] => {
+      const totalTokens = estimateTextTokens(content.text, options);
+      if (totalTokens <= maxTokens) {
+        return [content];
+      }
+
+      const ratio = options?.textTokenRatio ?? 4;
+      const chunkSize = Math.max(1, maxTokens * ratio);
+      const chunks: ArtifactContent[] = [];
+
+      for (let offset = 0; offset < content.text.length; offset += chunkSize) {
+        const text = content.text.slice(offset, offset + chunkSize);
+        chunks.push({
+          page: content.page,
+          text,
+          media: offset === 0 ? content.media : undefined
+        });
+      }
+
+      return chunks;
+    };
+    ```
+
+    Text is split by character count using a token ratio (default: 4 chars/token).
+  </Step>
+  
+  <Step title="Group contents into parts">
+    Combine content blocks into artifact parts, respecting token and image budgets:
+
+    ```typescript
+    const chunks: Artifact[] = [];
+    let currentContents: ArtifactContent[] = [];
+    let currentTokens = 0;
+    let currentImages = 0;
+
+    for (const content of splitContents) {
+      const contentTokens = countContentTokens(content, options);
+      const contentImages = content.media?.length ?? 0;
+
+      const exceedsTokens =
+        currentContents.length > 0 && currentTokens + contentTokens > maxTokens;
+      const exceedsImages =
+        maxImages !== undefined &&
+        currentContents.length > 0 &&
+        currentImages + contentImages > maxImages;
+
+      if (exceedsTokens || exceedsImages) {
+        chunks.push({
+          ...artifact,
+          id: `${artifact.id}:part:${chunks.length + 1}`,
+          contents: currentContents,
+          tokens: currentTokens
+        });
+        currentContents = [];
+        currentTokens = 0;
+        currentImages = 0;
+      }
+
+      currentContents.push(content);
+      currentTokens += contentTokens;
+      currentImages += contentImages;
+    }
+    ```
+  </Step>
+  
+  <Step title="Return split artifacts">
+    Each split artifact gets a unique ID like `pdf-1:part:1`, `pdf-1:part:2`, etc.
+  </Step>
+</Steps>
+
+### Split artifact structure
+
+Split artifacts maintain the original structure:
+
+```typescript
+// Original artifact
+const original: Artifact = {
+  id: "doc-1",
+  type: "pdf",
+  raw: async () => buffer,
+  contents: [
+    { page: 1, text: "..." },
+    { page: 2, text: "..." },
+    { page: 3, text: "..." }
+  ]
+};
+
+// After splitting (example)
+const splits = [
+  {
+    id: "doc-1:part:1",
+    type: "pdf",
+    raw: async () => buffer,
+    contents: [
+      { page: 1, text: "..." },
+      { page: 2, text: "..." }
+    ],
+    tokens: 8500
+  },
+  {
+    id: "doc-1:part:2",
+    type: "pdf",
+    raw: async () => buffer,
+    contents: [
+      { page: 3, text: "..." }
+    ],
+    tokens: 4200
+  }
+];
+```
+
+## Batch creation
+
+The `ArtifactBatcher` groups split artifacts into batches:
+
+```typescript
+import { batchArtifacts } from "@mateffy/struktur";
+
+const batches = batchArtifacts(artifacts, {
+  maxTokens: 10_000,
+  maxImages: 5
+});
+```
+
+### Batching algorithm
+
+```typescript
+export const batchArtifacts = (
+  artifacts: Artifact[],
+  options: BatchOptions
+): Artifact[][] => {
+  const maxTokens = options.modelMaxTokens
+    ? Math.min(options.maxTokens, options.modelMaxTokens)
+    : options.maxTokens;
+
+  const batches: Artifact[][] = [];
+  let currentBatch: Artifact[] = [];
+  let currentTokens = 0;
+  let currentImages = 0;
+
+  for (const artifact of artifacts) {
+    // Split artifact if needed
+    const splits = splitArtifact(artifact, { ...options, maxTokens });
+
+    for (const split of splits) {
+      const splitTokens = countArtifactTokens(split, options);
+      const splitImages = countArtifactImages(split);
+
+      const exceedsTokens =
+        currentBatch.length > 0 && currentTokens + splitTokens > maxTokens;
+      const exceedsImages =
+        options.maxImages !== undefined &&
+        currentBatch.length > 0 &&
+        currentImages + splitImages > options.maxImages;
+
+      if (exceedsTokens || exceedsImages) {
+        batches.push(currentBatch);
+        currentBatch = [];
+        currentTokens = 0;
+        currentImages = 0;
+      }
+
+      currentBatch.push(split);
+      currentTokens += splitTokens;
+      currentImages += splitImages;
+    }
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
+};
+```
+
+Key features:
+
+- **Model max tokens**: Respects `modelMaxTokens` if provided (uses minimum of user limit and model limit)
+- **Greedy packing**: Adds artifacts to current batch until limits are exceeded
+- **Automatic splitting**: Calls `splitArtifact` internally for oversized artifacts
+- **Image limits**: Respects optional `maxImages` per batch
+
+## Token counting
+
+Struktur estimates token counts using a configurable ratio:
+
+```typescript
+export const estimateTextTokens = (
+  text: string,
+  options?: TokenCountOptions
+): number => {
+  const ratio = options?.textTokenRatio ?? 4;
+  return Math.ceil(text.length / ratio);
+};
+```
+
+Default: **4 characters per token** (conservative estimate for English text).
+
+You can override this:
+
+```typescript
+const batches = batchArtifacts(artifacts, {
+  maxTokens: 10_000,
+  textTokenRatio: 3.5  // More accurate for specific content
+});
+```
+
+### Counting artifact tokens
+
+```typescript
+export const countContentTokens = (
+  content: ArtifactContent,
+  options?: TokenCountOptions
+): number => {
+  const textTokens = content.text
+    ? estimateTextTokens(content.text, options)
+    : 0;
+  const imageTokens = (content.media?.length ?? 0) * (options?.imageTokens ?? 258);
+  return textTokens + imageTokens;
+};
+
+export const countArtifactTokens = (
+  artifact: Artifact,
+  options?: TokenCountOptions
+): number => {
+  if (artifact.tokens !== undefined) {
+    return artifact.tokens;
+  }
+  return artifact.contents.reduce(
+    (sum, content) => sum + countContentTokens(content, options),
+    0
+  );
+};
+```
+
+Images default to **258 tokens** (OpenAI's token cost for images in low-detail mode).
+
+## Strategy integration
+
+Strategies use a helper to create batches:
+
+```typescript
+import { getBatches } from "./utils";
+
+const batches = getBatches(options.artifacts, {
+  maxTokens: this.config.chunkSize,
+  maxImages: this.config.maxImages
+});
+```
+
+This is used by:
+
+- `ParallelStrategy`
+- `SequentialStrategy`
+- `ParallelAutoMergeStrategy`
+- `SequentialAutoMergeStrategy`
+- `DoublePassStrategy`
+- `DoublePassAutoMergeStrategy`
+
+The `SimpleStrategy` does not chunk—it processes all artifacts in a single call.
+
+## Configuration options
+
+### Batch options
+
+```typescript
+type BatchOptions = {
+  maxTokens: number;          // Required: token budget per batch
+  maxImages?: number;         // Optional: image limit per batch
+  textTokenRatio?: number;    // Optional: chars per token (default: 4)
+  imageTokens?: number;       // Optional: tokens per image (default: 258)
+  modelMaxTokens?: number;    // Optional: model's max context window
+};
+```
+
+### Strategy-level configuration
+
+```typescript
+import { extract, parallel } from "@mateffy/struktur";
+
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({
+    model,
+    mergeModel,
+    chunkSize: 50_000,      // 50K tokens per batch
+    maxImages: 10            // Max 10 images per batch
+  })
+});
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Set chunkSize based on model limits">
+    Leave headroom for prompts and schema:
+
+    ```typescript
+    // GPT-4 Turbo: 128K context window
+    // Set chunkSize to ~100K to leave room for system prompt
+    const result = await extract({
+      artifacts,
+      schema,
+      strategy: parallel({
+        model: openai("gpt-4-turbo"),
+        chunkSize: 100_000
+      })
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Use maxImages for vision models">
+    Vision models have image limits (e.g., 10 images per call for GPT-4V):
+
+    ```typescript
+    const result = await extract({
+      artifacts,
+      schema,
+      strategy: parallel({
+        model: openai("gpt-4-vision-preview"),
+        chunkSize: 50_000,
+        maxImages: 10  // Respect model limit
+      })
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Adjust textTokenRatio for accuracy">
+    If you have precise token counts (e.g., from tiktoken), adjust the ratio:
+
+    ```typescript
+    import { countArtifactTokens } from "@mateffy/struktur";
+
+    // Measure actual ratio for your content
+    const text = "...";
+    const actualTokens = tiktoken.encode(text).length;
+    const ratio = text.length / actualTokens;
+
+    const batches = batchArtifacts(artifacts, {
+      maxTokens: 10_000,
+      textTokenRatio: ratio  // Use measured ratio
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Pre-compute artifact tokens">
+    For repeated extractions, pre-compute and cache token counts:
+
+    ```typescript
+    const artifact: Artifact = {
+      id: "doc-1",
+      type: "text",
+      raw: async () => buffer,
+      contents,
+      tokens: 15_432  // Pre-computed
+    };
+    ```
+
+    If `artifact.tokens` is set, Struktur uses it instead of estimating.
+  </Accordion>
+</AccordionGroup>
+
+## Monitoring chunking
+
+Strategies emit progress events showing batch counts:
+
+```typescript
+const result = await extract({
+  artifacts,
+  schema,
+  strategy: parallel({ model, chunkSize: 10_000 }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`${step}/${total}: ${label}`);
+    }
+  }
+});
+```
+
+Output:
+```
+1/8: start
+2/8: batch 1/4
+3/8: batch 2/4
+4/8: batch 3/4
+5/8: batch 4/4
+6/8: merge
+8/8: complete
+```
+
+The number of batches (4 in this example) is determined by chunking.
+
+## Example: Large PDF extraction
+
+```typescript
+import { extract, doublePass, fileToArtifact } from "@mateffy/struktur";
+import { google } from "@ai-sdk/google";
+
+// 1. Create artifact from PDF (using custom provider)
+const pdfBuffer = await Bun.file("report.pdf").arrayBuffer();
+const artifact = await fileToArtifact(Buffer.from(pdfBuffer), {
+  mimeType: "application/pdf",
+  providers: {
+    "application/pdf": async (buffer) => ({
+      id: "report",
+      type: "pdf",
+      raw: async () => buffer,
+      contents: pages.map((text, i) => ({ page: i + 1, text }))
+    })
+  }
+});
+
+// 2. Extract with automatic chunking
+const result = await extract({
+  artifacts: [artifact],
+  schema,
+  strategy: doublePass({
+    model: google("gemini-2.0-flash-exp"),
+    mergeModel: google("gemini-2.0-flash-exp"),
+    chunkSize: 50_000,  // 50K tokens per batch
+    concurrency: 4       // Process 4 batches in parallel
+  }),
+  events: {
+    onStep: ({ step, total, label }) => {
+      console.log(`Progress: ${step}/${total} - ${label}`);
+    }
+  }
+});
+
+console.log(result.data);
+```
+
+Struktur automatically:
+
+1. Splits the PDF into parts fitting 50K tokens
+2. Batches parts together
+3. Processes batches in parallel (pass 1)
+4. Merges results
+5. Refines sequentially (pass 2)
+
+No manual chunking required.
