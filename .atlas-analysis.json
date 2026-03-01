@@ -1,0 +1,124 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Struktur",
+  "projectDescription": "A TypeScript library for structured data extraction from artifacts using LLMs with token-aware chunking and schema validation.",
+  "theme": "aspen",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4f46e5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/artifacts",
+              "concepts/strategies",
+              "concepts/schemas",
+              "concepts/chunking"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/extraction",
+              "guides/providers",
+              "guides/events",
+              "guides/cli"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/simple-extraction",
+              "examples/parallel-processing",
+              "examples/custom-artifacts"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/extract",
+              "api/types"
+            ]
+          },
+          {
+            "group": "Strategies",
+            "pages": [
+              "api/strategies/simple",
+              "api/strategies/parallel",
+              "api/strategies/sequential",
+              "api/strategies/parallel-auto-merge",
+              "api/strategies/sequential-auto-merge",
+              "api/strategies/double-pass",
+              "api/strategies/double-pass-auto-merge"
+            ]
+          },
+          {
+            "group": "Artifacts",
+            "pages": [
+              "api/artifacts/url-to-artifact",
+              "api/artifacts/file-to-artifact",
+              "api/artifacts/providers"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "api/cli/extract",
+              "api/cli/verify",
+              "api/cli/auth",
+              "api/cli/models"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multiple extraction strategies (simple, parallel, sequential, auto-merge, double-pass)",
+    "Token-aware chunking and batching",
+    "Schema validation with Ajv and automatic retries",
+    "Schema-aware merge and deduplication",
+    "Support for multiple AI providers (OpenAI, Anthropic, Google, OpenRouter)",
+    "Progress tracking and event hooks",
+    "CLI tool for extraction and artifact verification",
+    "TypeScript-first with full type inference"
+  ],
+  "publicApiSurface": [
+    "extract({ artifacts, schema, strategy, events? })",
+    "simple({ model })",
+    "parallel({ model, mergeModel, chunkSize, concurrency })",
+    "sequential({ model, chunkSize })",
+    "parallelAutoMerge({ model, dedupeModel, chunkSize, concurrency })",
+    "sequentialAutoMerge({ model, dedupeModel, chunkSize })",
+    "doublePass({ model, mergeModel, chunkSize })",
+    "doublePassAutoMerge({ model, dedupeModel, chunkSize })",
+    "urlToArtifact(url, options?)",
+    "fileToArtifact(buffer, options)",
+    "registerArtifactInputParser(parser)",
+    "validateSerializedArtifacts(data)",
+    "parseSerializedArtifacts(data)",
+    "hydrateSerializedArtifacts(data)",
+    "parseInputToArtifacts(input)",
+    "struktur extract-file --schema <path> --input <path> --model <provider/model> --strategy <name>",
+    "struktur verify --input <path>",
+    "struktur auth set --provider <name> --token <value>",
+    "struktur models --provider <name>"
+  ]
+}
